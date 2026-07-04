@@ -1,11 +1,13 @@
 const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
+const path = require("path");
 
 const authRoutes = require("./routes/auth.routes");
 const learnRoutes = require("./routes/learn.routes");
 const jobsRoutes = require("./routes/jobs.routes");
-const marketplaceRoutes = require("./routes/marketplace.routes");   // ← add
+const marketplaceRoutes = require("./routes/marketplace.routes");
+const uploadRoutes = require("./routes/upload.routes");
 
 const app = express();
 
@@ -19,13 +21,17 @@ app.get("/health", (req, res) => {
   res.status(200).json({ success: true, message: "ElevateHer API is running" });
 });
 
+// Serve uploaded files
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+
 // Feature routes
 app.use("/api/auth", authRoutes);
 app.use("/api/learn", learnRoutes);
 app.use("/api/jobs", jobsRoutes);
-app.use("/api/marketplace", marketplaceRoutes);   // ← add
+app.use("/api/marketplace", marketplaceRoutes);
+app.use("/api/upload", uploadRoutes);
 
-// 404 handler
+// 404 handler - must stay LAST, after all real routes above
 app.use((req, res) => {
   res.status(404).json({ success: false, message: "Route not found" });
 });

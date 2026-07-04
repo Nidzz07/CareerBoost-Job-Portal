@@ -1,0 +1,37 @@
+# Run with: docker-compose up --build
+# Spins up backend + Postgres together for production-style testing.
+# For everyday dev with SQLite, just use `npm run dev` - no Docker needed.
+
+version: "3.8"
+
+services:
+  backend:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=7d
+      - DATABASE_URL=postgresql://elevateher:elevateher@postgres:5432/elevateher
+    depends_on:
+      - postgres
+    volumes:
+      - uploads_data:/app/uploads
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=elevateher
+      - POSTGRES_PASSWORD=elevateher
+      - POSTGRES_DB=elevateher
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+  uploads_data:
