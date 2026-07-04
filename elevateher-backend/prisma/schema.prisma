@@ -1,0 +1,197 @@
+// ElevateHer Backend - Prisma Schema
+// Covers: Auth/Onboarding (User) + Learn (Course, Enrollment)
+// + Earn (Job, Application, Review) + Flourish (Product, Order, OrderItem)
+// Payment integration (Razorpay/UPI) will be layered on top of Order in Phase 2.
+// Note: Using String instead of enum because SQLite doesn't support enums.
+// Allowed Role values: LEARNER, EMPLOYER, SELLER, ADMIN
+// Allowed CourseLevel values: BEGINNER, INTERMEDIATE, ADVANCED
+// Allowed JobType values: FULL_TIME, PART_TIME, CONTRACT, GIG
+// Allowed ApplicationStatus values: PENDING, SHORTLISTED, REJECTED, HIRED
+// Allowed OrderStatus values: PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED
+// Allowed PaymentStatus values: PENDING, PAID, FAILED
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  phone        String   @unique
+  email        String?  @unique
+  passwordHash String
+  language     String   @default("en")
+  location     String?
+  role         String   @default("LEARNER") // LEARNER | EMPLOYER | SELLER | ADMIN
+  verified     Boolean  @default(false)
+
+  employerVerified Boolean @default(false)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  enrollments   Enrollment[]
+  coursesTaught Course[]     @relation("MentorCourses")
+
+  jobsPosted      Job[]         @relation("EmployerJobs")
+  applications    Application[]
+  reviewsGiven    Review[]      @relation("ReviewsGiven")
+  reviewsReceived Review[]      @relation("ReviewsReceived")
+
+  productsListed Product[] @relation("SellerProducts")
+  orders         Order[]   @relation("BuyerOrders")
+
+  @@map("users")
+}
+
+model Course {
+  id          String       @id @default(uuid())
+  title       String
+  description String?
+  category    String
+  language    String       @default("hi")
+  level       String       @default("BEGINNER")
+  mediaUrl    String?
+  duration    Int          @default(0)
+  mentorId    String?
+  mentor      User?        @relation("MentorCourses", fields: [mentorId], references: [id])
+  isPublished Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  enrollments Enrollment[]
+
+  @@map("courses")
+}
+
+model Enrollment {
+  id             String    @id @default(uuid())
+  userId         String
+  courseId       String
+  progress       Int       @default(0)
+  completedAt    DateTime?
+  certificateUrl String?
+  enrolledAt     DateTime  @default(now())
+
+  user   User   @relation(fields: [userId], references: [id])
+  course Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+  @@map("enrollments")
+}
+
+model Job {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  category    String
+  location    String?
+  jobType     String   @default("FULL_TIME")
+  salaryMin   Int?
+  salaryMax   Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employerId String
+  employer   User   @relation("EmployerJobs", fields: [employerId], references: [id])
+
+  applications Application[]
+  reviews      Review[]
+
+  @@map("jobs")
+}
+
+model Application {
+  id        String   @id @default(uuid())
+  jobId     String
+  userId    String
+  status    String   @default("PENDING")
+  coverNote String?
+  appliedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  job  Job  @relation(fields: [jobId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([jobId, userId])
+  @@map("applications")
+}
+
+model Review {
+  id         String   @id @default(uuid())
+  jobId      String
+  reviewerId String
+  revieweeId String
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+
+  job      Job  @relation(fields: [jobId], references: [id])
+  reviewer User @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  reviewee User @relation("ReviewsReceived", fields: [revieweeId], references: [id])
+
+  @@unique([jobId, reviewerId, revieweeId])
+  @@map("reviews")
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  category    String
+  price       Float
+  stock       Int      @default(0)
+  imageUrl    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sellerId String
+  seller   User   @relation("SellerProducts", fields: [sellerId], references: [id])
+
+  orderItems OrderItem[]
+
+  @@map("products")
+}
+
+model Order {
+  id              String   @id @default(uuid())
+  buyerId         String
+  totalAmount     Float
+  status          String   @default("PLACED") // PLACED | CONFIRMED | SHIPPED | DELIVERED | CANCELLED
+  paymentStatus   String   @default("PENDING") // PENDING | PAID | FAILED
+  shippingAddress String?
+
+  // Razorpay payment tracking
+  razorpayOrderId   String? @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  buyer User @relation("BuyerOrders", fields: [buyerId], references: [id])
+
+  items OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id              String @id @default(uuid())
+  orderId         String
+  productId       String
+  quantity        Int
+  priceAtPurchase Float // snapshot of product price when order was placed
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}

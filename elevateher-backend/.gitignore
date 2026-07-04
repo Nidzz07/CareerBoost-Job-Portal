@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Environment variables (secrets - never commit!)
+.env
+.env.local
+.env.*.local
+
+# SQLite database file (local dev data - don't share via git)
+prisma/dev.db
+prisma/dev.db-journal
+*.db
+*.db-journal
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE folders
+.vscode/
+.idea/
+
+# Build output (if you ever add a build step)
+dist/
+build/
+
+# Prisma generated client cache (regenerated automatically on npm install)
+# Note: DO NOT ignore prisma/migrations/ — those SQL files must be committed
+# so your teammates can run the same migrations on their machines.
