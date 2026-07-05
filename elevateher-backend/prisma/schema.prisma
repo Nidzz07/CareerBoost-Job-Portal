@@ -46,6 +46,9 @@ model User {
   productsListed Product[] @relation("SellerProducts")
   orders         Order[]   @relation("BuyerOrders")
 
+  quizAttempts  QuizAttempt[]
+  courseReviews CourseReview[]
+
   @@map("users")
 }
 
@@ -65,6 +68,8 @@ model Course {
   updatedAt   DateTime     @updatedAt
 
   enrollments Enrollment[]
+  quizzes     Quiz[]
+  reviews     CourseReview[]
 
   @@map("courses")
 }
@@ -194,4 +199,60 @@ model OrderItem {
   product Product @relation(fields: [productId], references: [id])
 
   @@map("order_items")
+}
+
+model Quiz {
+  id           String   @id @default(uuid())
+  courseId     String
+  title        String
+  passingScore Int      @default(70) // percentage required to pass
+  createdAt    DateTime @default(now())
+
+  course    Course        @relation(fields: [courseId], references: [id])
+  questions Question[]
+  attempts  QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+model Question {
+  id                 String @id @default(uuid())
+  quizId             String
+  questionText       String
+  optionsJson        String // JSON-stringified array of option strings, e.g. ["A","B","C","D"]
+  correctOptionIndex Int // index into optionsJson array
+
+  quiz Quiz @relation(fields: [quizId], references: [id])
+
+  @@map("questions")
+}
+
+model QuizAttempt {
+  id          String   @id @default(uuid())
+  quizId      String
+  userId      String
+  score       Int // percentage scored
+  passed      Boolean
+  answersJson String // JSON-stringified array of the option indices the user picked
+  attemptedAt DateTime @default(now())
+
+  quiz Quiz @relation(fields: [quizId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("quiz_attempts")
+}
+
+model CourseReview {
+  id        String   @id @default(uuid())
+  courseId  String
+  userId    String
+  rating    Int // 1 to 5
+  comment   String?
+  createdAt DateTime @default(now())
+
+  course Course @relation(fields: [courseId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([courseId, userId])
+  @@map("course_reviews")
 }
