@@ -387,6 +387,166 @@ async function getUserReviews(req, res) {
   }
 }
 
+// ---------- INTERVIEW SCHEDULING ----------
+
+/**
+ * POST /api/jobs/applications/:applicationId/interview
+ * Requires auth. Only the employer who owns the job (or admin) can schedule.
+ * Body: { scheduledAt (ISO date string), mode ("ONLINE"|"IN_PERSON"|"PHONE"), location, notes }
+ */
+async function scheduleInterview(req, res) {
+  try {
+    const { applicationId } = req.params;
+    const { scheduledAt, mode, location, notes } = req.body;
+
+    if (!scheduledAt) {
+      return res.status(400).json({ success: false, message: "scheduledAt is required" });
+    }
+    const parsedDate = new Date(scheduledAt);
+    if (isNaN(parsedDate.getTime())) {
+      return res.status(400).json({ success: false, message: "scheduledAt must be a valid date" });
+    }
+
+    const application = await prisma.application.findUnique({
+      where: { id: applicationId },
+      include: { job: true, interview: true },
+    });
+    if (!application) {
+      return res.status(404).json({ success: false, message: "Application not found" });
+    }
+    if (application.job.employerId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "You do not own this job posting" });
+    }
+    if (application.interview) {
+      return res.status(409).json({
+        success: false,
+        message: "An interview is already scheduled for this application. Use the update endpoint to reschedule.",
+      });
+    }
+
+    const interview = await prisma.interview.create({
+      data: {
+        applicationId,
+        scheduledAt: parsedDate,
+        mode: mode || "ONLINE",
+        location,
+        notes,
+      },
+    });
+
+    // Reflect the interview in the application status so it shows up clearly in listings.
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: { status: "SHORTLISTED" },
+    });
+
+    return res.status(201).json({ success: true, message: "Interview scheduled", data: { interview } });
+  } catch (err) {
+    console.error("Schedule interview error:", err);
+    return res.status(500).json({ success: false, message: "Could not schedule interview" });
+  }
+}
+
+/**
+ * PATCH /api/jobs/interviews/:id
+ * Requires auth. Only the employer who owns the job (or admin) can update.
+ * Body: any of { scheduledAt, mode, location, notes, status }
+ * status: SCHEDULED | COMPLETED | CANCELLED | RESCHEDULED
+ */
+async function updateInterview(req, res) {
+  try {
+    const { id } = req.params;
+    const { scheduledAt, mode, location, notes, status } = req.body;
+
+    const interview = await prisma.interview.findUnique({
+      where: { id },
+      include: { application: { include: { job: true } } },
+    });
+    if (!interview) {
+      return res.status(404).json({ success: false, message: "Interview not found" });
+    }
+    if (interview.application.job.employerId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "You do not own this job posting" });
+    }
+
+    const validStatuses = ["SCHEDULED", "COMPLETED", "CANCELLED", "RESCHEDULED"];
+    if (status !== undefined && !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `status must be one of: ${validStatuses.join(", ")}`,
+      });
+    }
+
+    let parsedDate;
+    if (scheduledAt !== undefined) {
+      parsedDate = new Date(scheduledAt);
+      if (isNaN(parsedDate.getTime())) {
+        return res.status(400).json({ success: false, message: "scheduledAt must be a valid date" });
+      }
+    }
+
+    const updated = await prisma.interview.update({
+      where: { id },
+      data: {
+        ...(parsedDate && { scheduledAt: parsedDate }),
+        ...(mode !== undefined && { mode }),
+        ...(location !== undefined && { location }),
+        ...(notes !== undefined && { notes }),
+        ...(status !== undefined && { status }),
+      },
+    });
+
+    return res.status(200).json({ success: true, message: "Interview updated", data: { interview: updated } });
+  } catch (err) {
+    console.error("Update interview error:", err);
+    return res.status(500).json({ success: false, message: "Could not update interview" });
+  }
+}
+
+/**
+ * GET /api/jobs/my-interviews
+ * Requires auth (LEARNER). Lists interviews scheduled for the logged-in
+ * user's own applications.
+ */
+async function getMyInterviews(req, res) {
+  try {
+    const interviews = await prisma.interview.findMany({
+      where: { application: { userId: req.user.id } },
+      include: { application: { include: { job: true } } },
+      orderBy: { scheduledAt: "asc" },
+    });
+
+    return res.status(200).json({ success: true, data: { interviews } });
+  } catch (err) {
+    console.error("Get my interviews error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch your interviews" });
+  }
+}
+
+/**
+ * GET /api/jobs/employer-interviews
+ * Requires auth (EMPLOYER/ADMIN). Lists interviews across all of the
+ * logged-in employer's job postings.
+ */
+async function getEmployerInterviews(req, res) {
+  try {
+    const interviews = await prisma.interview.findMany({
+      where: { application: { job: { employerId: req.user.id } } },
+      include: {
+        application: {
+          include: { job: true, user: { select: { id: true, name: true, phone: true } } },
+        },
+      },
+      orderBy: { scheduledAt: "asc" },
+    });
+
+    return res.status(200).json({ success: true, data: { interviews } });
+  } catch (err) {
+    console.error("Get employer interviews error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch interviews" });
+  }
+}
+
 module.exports = {
   listJobs,
   getJob,
@@ -400,4 +560,8 @@ module.exports = {
   verifyEmployer,
   addReview,
   getUserReviews,
+  scheduleInterview,
+  updateInterview,
+  getMyInterviews,
+  getEmployerInterviews,
 };

@@ -452,6 +452,366 @@ async function verifyPayment(req, res) {
   }
 }
 
+// ---------- PRODUCT REVIEWS ----------
+
+/**
+ * POST /api/marketplace/products/:id/review
+ * Requires auth. Only buyers who have a PAID order containing this product
+ * can review it — keeps reviews genuine (verified-purchase style).
+ * Body: { rating (1-5), comment }
+ */
+async function addProductReview(req, res) {
+  try {
+    const { id: productId } = req.params;
+    const { rating, comment } = req.body;
+    const userId = req.user.id;
+
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({ success: false, message: "rating must be between 1 and 5" });
+    }
+
+    const product = await prisma.product.findUnique({ where: { id: productId } });
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    const purchase = await prisma.orderItem.findFirst({
+      where: {
+        productId,
+        order: { buyerId: userId, paymentStatus: "PAID" },
+      },
+    });
+    if (!purchase) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only review products you have purchased and paid for",
+      });
+    }
+
+    const existing = await prisma.productReview.findUnique({
+      where: { productId_userId: { productId, userId } },
+    });
+    if (existing) {
+      return res.status(409).json({ success: false, message: "You have already reviewed this product" });
+    }
+
+    const review = await prisma.productReview.create({
+      data: { productId, userId, rating, comment },
+    });
+
+    return res.status(201).json({ success: true, message: "Review submitted", data: { review } });
+  } catch (err) {
+    console.error("Add product review error:", err);
+    return res.status(500).json({ success: false, message: "Could not submit review" });
+  }
+}
+
+/**
+ * GET /api/marketplace/products/:id/reviews
+ * Public. Lists reviews for a product, plus average rating.
+ */
+async function getProductReviews(req, res) {
+  try {
+    const { id: productId } = req.params;
+
+    const reviews = await prisma.productReview.findMany({
+      where: { productId },
+      include: { user: { select: { id: true, name: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const avgRating =
+      reviews.length > 0 ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length : null;
+
+    return res.status(200).json({
+      success: true,
+      data: { reviews, avgRating, totalReviews: reviews.length },
+    });
+  } catch (err) {
+    console.error("Get product reviews error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch reviews" });
+  }
+}
+
+// ---------- CART ----------
+
+/**
+ * Ensures a cart row exists for the user and returns it with items+product details.
+ */
+async function getOrCreateCart(userId) {
+  let cart = await prisma.cart.findUnique({
+    where: { userId },
+    include: { items: { include: { product: true } } },
+  });
+  if (!cart) {
+    cart = await prisma.cart.create({
+      data: { userId },
+      include: { items: { include: { product: true } } },
+    });
+  }
+  return cart;
+}
+
+function withCartTotal(cart) {
+  const total = cart.items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  return { ...cart, total };
+}
+
+/**
+ * GET /api/marketplace/cart
+ * Requires auth. Returns the logged-in user's cart with computed total.
+ */
+async function getCart(req, res) {
+  try {
+    const cart = await getOrCreateCart(req.user.id);
+    return res.status(200).json({ success: true, data: { cart: withCartTotal(cart) } });
+  } catch (err) {
+    console.error("Get cart error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch cart" });
+  }
+}
+
+/**
+ * POST /api/marketplace/cart/items
+ * Requires auth. Adds a product to the cart, or increases quantity if already present.
+ * Body: { productId, quantity (default 1) }
+ */
+async function addToCart(req, res) {
+  try {
+    const { productId, quantity } = req.body;
+    const qty = quantity ?? 1;
+
+    if (!productId || qty < 1) {
+      return res.status(400).json({ success: false, message: "productId is required and quantity must be >= 1" });
+    }
+
+    const product = await prisma.product.findUnique({ where: { id: productId } });
+    if (!product || !product.isActive) {
+      return res.status(404).json({ success: false, message: "Product not found or unavailable" });
+    }
+
+    const cart = await getOrCreateCart(req.user.id);
+    const existingItem = cart.items.find((item) => item.productId === productId);
+
+    if (existingItem) {
+      await prisma.cartItem.update({
+        where: { id: existingItem.id },
+        data: { quantity: existingItem.quantity + qty },
+      });
+    } else {
+      await prisma.cartItem.create({
+        data: { cartId: cart.id, productId, quantity: qty },
+      });
+    }
+
+    const updatedCart = await getOrCreateCart(req.user.id);
+    return res.status(200).json({ success: true, message: "Added to cart", data: { cart: withCartTotal(updatedCart) } });
+  } catch (err) {
+    console.error("Add to cart error:", err);
+    return res.status(500).json({ success: false, message: "Could not add to cart" });
+  }
+}
+
+/**
+ * PATCH /api/marketplace/cart/items/:productId
+ * Requires auth. Sets the quantity for a cart item. quantity: 0 removes it.
+ * Body: { quantity }
+ */
+async function updateCartItem(req, res) {
+  try {
+    const { productId } = req.params;
+    const { quantity } = req.body;
+
+    if (quantity === undefined || quantity < 0) {
+      return res.status(400).json({ success: false, message: "quantity must be 0 or greater" });
+    }
+
+    const cart = await getOrCreateCart(req.user.id);
+    const existingItem = cart.items.find((item) => item.productId === productId);
+    if (!existingItem) {
+      return res.status(404).json({ success: false, message: "This product is not in your cart" });
+    }
+
+    if (quantity === 0) {
+      await prisma.cartItem.delete({ where: { id: existingItem.id } });
+    } else {
+      await prisma.cartItem.update({ where: { id: existingItem.id }, data: { quantity } });
+    }
+
+    const updatedCart = await getOrCreateCart(req.user.id);
+    return res.status(200).json({ success: true, message: "Cart updated", data: { cart: withCartTotal(updatedCart) } });
+  } catch (err) {
+    console.error("Update cart item error:", err);
+    return res.status(500).json({ success: false, message: "Could not update cart item" });
+  }
+}
+
+/**
+ * DELETE /api/marketplace/cart/items/:productId
+ * Requires auth. Removes a single item from the cart.
+ */
+async function removeCartItem(req, res) {
+  try {
+    const { productId } = req.params;
+
+    const cart = await getOrCreateCart(req.user.id);
+    const existingItem = cart.items.find((item) => item.productId === productId);
+    if (!existingItem) {
+      return res.status(404).json({ success: false, message: "This product is not in your cart" });
+    }
+
+    await prisma.cartItem.delete({ where: { id: existingItem.id } });
+
+    const updatedCart = await getOrCreateCart(req.user.id);
+    return res.status(200).json({ success: true, message: "Item removed", data: { cart: withCartTotal(updatedCart) } });
+  } catch (err) {
+    console.error("Remove cart item error:", err);
+    return res.status(500).json({ success: false, message: "Could not remove cart item" });
+  }
+}
+
+/**
+ * DELETE /api/marketplace/cart
+ * Requires auth. Empties the cart completely.
+ */
+async function clearCart(req, res) {
+  try {
+    const cart = await getOrCreateCart(req.user.id);
+    await prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
+
+    return res.status(200).json({ success: true, message: "Cart cleared" });
+  } catch (err) {
+    console.error("Clear cart error:", err);
+    return res.status(500).json({ success: false, message: "Could not clear cart" });
+  }
+}
+
+/**
+ * POST /api/marketplace/cart/checkout
+ * Requires auth. Converts the current cart into an Order (same atomic
+ * stock-check + deduction logic as createOrder), then empties the cart.
+ * Body: { shippingAddress }
+ */
+async function checkoutCart(req, res) {
+  try {
+    const { shippingAddress } = req.body;
+    const buyerId = req.user.id;
+
+    const cart = await getOrCreateCart(buyerId);
+    if (cart.items.length === 0) {
+      return res.status(400).json({ success: false, message: "Your cart is empty" });
+    }
+
+    const order = await prisma.$transaction(async (tx) => {
+      let totalAmount = 0;
+      const orderItemsData = [];
+
+      for (const item of cart.items) {
+        const product = await tx.product.findUnique({ where: { id: item.productId } });
+        if (!product || !product.isActive) {
+          throw new Error(`Product ${item.productId} not found or unavailable`);
+        }
+        if (product.stock < item.quantity) {
+          throw new Error(`Insufficient stock for "${product.name}" (available: ${product.stock})`);
+        }
+
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { stock: product.stock - item.quantity },
+        });
+
+        totalAmount += product.price * item.quantity;
+        orderItemsData.push({
+          productId: item.productId,
+          quantity: item.quantity,
+          priceAtPurchase: product.price,
+        });
+      }
+
+      const newOrder = await tx.order.create({
+        data: {
+          buyerId,
+          totalAmount,
+          shippingAddress,
+          items: { create: orderItemsData },
+        },
+        include: { items: { include: { product: true } } },
+      });
+
+      await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+
+      return newOrder;
+    });
+
+    return res.status(201).json({ success: true, message: "Order placed from cart", data: { order } });
+  } catch (err) {
+    console.error("Checkout cart error:", err);
+    return res.status(400).json({ success: false, message: err.message || "Could not check out" });
+  }
+}
+
+// ---------- SELLER ANALYTICS ----------
+
+/**
+ * GET /api/marketplace/seller-analytics
+ * Requires auth (SELLER/ADMIN). Revenue and sales breakdown for the
+ * logged-in seller's products. Only counts PAID orders as real revenue.
+ */
+async function getSellerAnalytics(req, res) {
+  try {
+    const sellerId = req.user.id;
+
+    const items = await prisma.orderItem.findMany({
+      where: { product: { sellerId } },
+      include: { product: true, order: true },
+    });
+
+    const paidItems = items.filter((item) => item.order.paymentStatus === "PAID");
+
+    const totalRevenue = paidItems.reduce((sum, item) => sum + item.priceAtPurchase * item.quantity, 0);
+    const totalUnitsSold = paidItems.reduce((sum, item) => sum + item.quantity, 0);
+    const totalOrders = new Set(paidItems.map((item) => item.orderId)).size;
+
+    const productStatsMap = {};
+    for (const item of paidItems) {
+      if (!productStatsMap[item.productId]) {
+        productStatsMap[item.productId] = {
+          productId: item.productId,
+          name: item.product.name,
+          unitsSold: 0,
+          revenue: 0,
+        };
+      }
+      productStatsMap[item.productId].unitsSold += item.quantity;
+      productStatsMap[item.productId].revenue += item.priceAtPurchase * item.quantity;
+    }
+
+    const topProducts = Object.values(productStatsMap)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5);
+
+    const totalProductsListed = await prisma.product.count({ where: { sellerId } });
+    const pendingOrdersCount = new Set(
+      items.filter((item) => item.order.paymentStatus === "PENDING").map((item) => item.orderId)
+    ).size;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        totalRevenue,
+        totalUnitsSold,
+        totalOrders,
+        totalProductsListed,
+        pendingOrdersCount,
+        topProducts,
+      },
+    });
+  } catch (err) {
+    console.error("Get seller analytics error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch analytics" });
+  }
+}
+
 module.exports = {
   listProducts,
   getProduct,
@@ -465,4 +825,13 @@ module.exports = {
   updateOrderStatus,
   createPayment,
   verifyPayment,
+  addProductReview,
+  getProductReviews,
+  getCart,
+  addToCart,
+  updateCartItem,
+  removeCartItem,
+  clearCart,
+  checkoutCart,
+  getSellerAnalytics,
 };
