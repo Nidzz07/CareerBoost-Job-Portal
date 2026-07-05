@@ -24,6 +24,9 @@ app.get("/health", (req, res) => {
 // Serve uploaded files
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
+// Serve generated certificate PDFs
+app.use("/certificates", express.static(path.join(__dirname, "..", "public", "certificates")));
+
 // Feature routes
 app.use("/api/auth", authRoutes);
 app.use("/api/learn", learnRoutes);

@@ -1,5 +1,5 @@
 const prisma = require("../config/prisma");
-
+const { generateCertificate } = require("../services/certificate");
 /**
  * GET /api/learn/courses
  * Public. List published courses, optionally filtered by category/language.
@@ -81,6 +81,81 @@ async function createCourse(req, res) {
 }
 
 /**
+ * PATCH /api/learn/courses/:id
+ * Requires auth. Only the mentor who owns the course (or admin) can update it.
+ * Also used to publish/unpublish a course via isPublished.
+ */
+async function updateCourse(req, res) {
+  try {
+    const { id } = req.params;
+    const { title, description, category, language, level, mediaUrl, duration, isPublished } = req.body;
+
+    const course = await prisma.course.findUnique({ where: { id } });
+    if (!course) {
+      return res.status(404).json({ success: false, message: "Course not found" });
+    }
+    if (course.mentorId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "You do not own this course" });
+    }
+
+    const updated = await prisma.course.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title }),
+        ...(description !== undefined && { description }),
+        ...(category !== undefined && { category }),
+        ...(language !== undefined && { language }),
+        ...(level !== undefined && { level }),
+        ...(mediaUrl !== undefined && { mediaUrl }),
+        ...(duration !== undefined && { duration }),
+        ...(isPublished !== undefined && { isPublished }),
+      },
+    });
+
+    return res.status(200).json({ success: true, message: "Course updated", data: { course: updated } });
+  } catch (err) {
+    console.error("Update course error:", err);
+    return res.status(500).json({ success: false, message: "Could not update course" });
+  }
+}
+
+/**
+ * DELETE /api/learn/courses/:id
+ * Requires auth. Only the mentor who owns the course (or admin) can delete it.
+ * Blocked if learners are already enrolled — unpublish instead in that case,
+ * so their progress and certificates aren't silently destroyed.
+ */
+async function deleteCourse(req, res) {
+  try {
+    const { id } = req.params;
+
+    const course = await prisma.course.findUnique({
+      where: { id },
+      include: { _count: { select: { enrollments: true } } },
+    });
+    if (!course) {
+      return res.status(404).json({ success: false, message: "Course not found" });
+    }
+    if (course.mentorId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "You do not own this course" });
+    }
+    if (course._count.enrollments > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Cannot delete a course with existing enrollments. Unpublish it instead.",
+      });
+    }
+
+    await prisma.course.delete({ where: { id } });
+
+    return res.status(200).json({ success: true, message: "Course deleted" });
+  } catch (err) {
+    console.error("Delete course error:", err);
+    return res.status(500).json({ success: false, message: "Could not delete course" });
+  }
+}
+
+/**
  * POST /api/learn/courses/:id/enroll
  * Requires auth. Enrolls the logged-in user into a course.
  */
@@ -115,7 +190,8 @@ async function enrollInCourse(req, res) {
 /**
  * PATCH /api/learn/enrollments/:id/progress
  * Requires auth. Updates progress percentage (0-100) for the caller's own enrollment.
- * Automatically marks completedAt when progress reaches 100.
+ * When progress reaches 100: marks completedAt AND generates a PDF certificate,
+ * saving its URL onto the enrollment (certificateUrl).
  */
 async function updateProgress(req, res) {
   try {
@@ -129,7 +205,10 @@ async function updateProgress(req, res) {
       });
     }
 
-    const enrollment = await prisma.enrollment.findUnique({ where: { id: enrollmentId } });
+    const enrollment = await prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+      include: { course: true, user: true },
+    });
     if (!enrollment) {
       return res.status(404).json({ success: false, message: "Enrollment not found" });
     }
@@ -137,15 +216,40 @@ async function updateProgress(req, res) {
       return res.status(403).json({ success: false, message: "This is not your enrollment" });
     }
 
+    const isNewlyCompleted = progress === 100 && enrollment.progress !== 100;
+    const completedAt = progress === 100 ? enrollment.completedAt || new Date() : null;
+
+    let certificateUrl = enrollment.certificateUrl;
+
+    if (isNewlyCompleted) {
+      try {
+        certificateUrl = await generateCertificate({
+          enrollmentId: enrollment.id,
+          userName: enrollment.user.name,
+          courseTitle: enrollment.course.title,
+          completionDate: completedAt,
+        });
+      } catch (certErr) {
+        // Don't fail the whole request if PDF generation has an issue —
+        // progress should still save. Log it so it can be regenerated/debugged.
+        console.error("Certificate generation error:", certErr);
+      }
+    }
+
     const updated = await prisma.enrollment.update({
       where: { id: enrollmentId },
       data: {
         progress,
-        completedAt: progress === 100 ? new Date() : null,
+        completedAt,
+        ...(certificateUrl && { certificateUrl }),
       },
     });
 
-    return res.status(200).json({ success: true, message: "Progress updated", data: { enrollment: updated } });
+    return res.status(200).json({
+      success: true,
+      message: isNewlyCompleted ? "Course completed! Certificate generated." : "Progress updated",
+      data: { enrollment: updated },
+    });
   } catch (err) {
     console.error("Update progress error:", err);
     return res.status(500).json({ success: false, message: "Could not update progress" });
@@ -171,11 +275,41 @@ async function getMyEnrollments(req, res) {
   }
 }
 
+/**
+ * GET /api/learn/enrollments/:id/certificate
+ * Requires auth. Returns the certificate URL for the caller's own completed enrollment.
+ * Handy single endpoint for the frontend instead of digging through my-courses.
+ */
+async function getCertificate(req, res) {
+  try {
+    const { id: enrollmentId } = req.params;
+
+    const enrollment = await prisma.enrollment.findUnique({ where: { id: enrollmentId } });
+    if (!enrollment) {
+      return res.status(404).json({ success: false, message: "Enrollment not found" });
+    }
+    if (enrollment.userId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "This is not your enrollment" });
+    }
+    if (!enrollment.certificateUrl) {
+      return res.status(404).json({ success: false, message: "Certificate not available yet — complete the course first" });
+    }
+
+    return res.status(200).json({ success: true, data: { certificateUrl: enrollment.certificateUrl } });
+  } catch (err) {
+    console.error("Get certificate error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch certificate" });
+  }
+}
+
 module.exports = {
   listCourses,
   getCourse,
   createCourse,
+  updateCourse,
+  deleteCourse,
   enrollInCourse,
   updateProgress,
   getMyEnrollments,
+  getCertificate,
 };
