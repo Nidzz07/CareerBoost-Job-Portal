@@ -67,6 +67,12 @@ model Course {
   mentorId    String?
   mentor      User?        @relation("MentorCourses", fields: [mentorId], references: [id])
   isPublished Boolean      @default(false)
+
+  // Creator marketplace: any user can submit a course; admin reviews it.
+  // Admin-created courses go straight to APPROVED (see controller logic).
+  price        Float  @default(0) // 0 = free course
+  reviewStatus String @default("PENDING") // PENDING | APPROVED | REJECTED
+
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -85,6 +91,12 @@ model Enrollment {
   completedAt    DateTime?
   certificateUrl String?
   enrolledAt     DateTime  @default(now())
+
+  // Payment tracking for paid courses. Free courses (price 0) are FREE immediately.
+  paymentStatus     String  @default("FREE") // FREE | PENDING | PAID | FAILED
+  razorpayOrderId   String? @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
 
   user   User   @relation(fields: [userId], references: [id])
   course Course @relation(fields: [courseId], references: [id])

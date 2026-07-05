@@ -1,11 +1,13 @@
+const crypto = require("crypto");
 const prisma = require("../config/prisma");
+const razorpay = require("../config/razorpay");
 const { generateCertificate } = require("../services/certificate");
 
 // ---------- COURSES ----------
 
 /**
  * GET /api/learn/courses
- * Public. List published courses, optionally filtered by category/language.
+ * Public. Lists live courses only — published AND admin-approved.
  * Query params: ?category=weaving&language=hi
  */
 async function listCourses(req, res) {
@@ -15,6 +17,7 @@ async function listCourses(req, res) {
     const courses = await prisma.course.findMany({
       where: {
         isPublished: true,
+        reviewStatus: "APPROVED",
         ...(category && { category }),
         ...(language && { language }),
       },
@@ -50,11 +53,15 @@ async function getCourse(req, res) {
 
 /**
  * POST /api/learn/courses
- * Requires auth (mentor/admin). Creates a new course.
+ * Requires auth. ANY logged-in user can submit a course (creator marketplace).
+ * - Admin-submitted courses go live immediately (reviewStatus: APPROVED, isPublished: true).
+ * - Everyone else's submissions start as reviewStatus: PENDING, isPublished: false —
+ *   invisible to the public until an admin approves them via reviewCourse().
+ * Body: { title, description, category, language, level, mediaUrl, duration, price }
  */
 async function createCourse(req, res) {
   try {
-    const { title, description, category, language, level, mediaUrl, duration } = req.body;
+    const { title, description, category, language, level, mediaUrl, duration, price } = req.body;
 
     if (!title || !category) {
       return res.status(400).json({
@@ -62,6 +69,11 @@ async function createCourse(req, res) {
         message: "title and category are required",
       });
     }
+    if (price !== undefined && price < 0) {
+      return res.status(400).json({ success: false, message: "price must not be negative" });
+    }
+
+    const isAdmin = req.user.role === "ADMIN";
 
     const course = await prisma.course.create({
       data: {
@@ -72,11 +84,20 @@ async function createCourse(req, res) {
         level: level || "BEGINNER",
         mediaUrl,
         duration: duration || 0,
+        price: price ?? 0,
         mentorId: req.user.id,
+        reviewStatus: isAdmin ? "APPROVED" : "PENDING",
+        isPublished: isAdmin, // non-admin submissions are never auto-published
       },
     });
 
-    return res.status(201).json({ success: true, message: "Course created", data: { course } });
+    return res.status(201).json({
+      success: true,
+      message: isAdmin
+        ? "Course created and published"
+        : "Course submitted for review. It will go live once an admin approves it.",
+      data: { course },
+    });
   } catch (err) {
     console.error("Create course error:", err);
     return res.status(500).json({ success: false, message: "Could not create course" });
@@ -85,13 +106,14 @@ async function createCourse(req, res) {
 
 /**
  * PATCH /api/learn/courses/:id
- * Requires auth. Only the mentor who owns the course (or admin) can update it.
- * Also used to publish/unpublish a course via isPublished.
+ * Requires auth. Only the creator who owns the course (or admin) can update it.
+ * Non-admin creators editing an already-approved course does NOT reset review status —
+ * keep it simple for now; admins can always unpublish via isPublished if something's wrong.
  */
 async function updateCourse(req, res) {
   try {
     const { id } = req.params;
-    const { title, description, category, language, level, mediaUrl, duration, isPublished } = req.body;
+    const { title, description, category, language, level, mediaUrl, duration, isPublished, price } = req.body;
 
     const course = await prisma.course.findUnique({ where: { id } });
     if (!course) {
@@ -99,6 +121,13 @@ async function updateCourse(req, res) {
     }
     if (course.mentorId !== req.user.id && req.user.role !== "ADMIN") {
       return res.status(403).json({ success: false, message: "You do not own this course" });
+    }
+    // Only admin can toggle isPublished directly — creators go through the review flow instead.
+    if (isPublished !== undefined && req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "Only an admin can publish/unpublish a course" });
+    }
+    if (price !== undefined && price < 0) {
+      return res.status(400).json({ success: false, message: "price must not be negative" });
     }
 
     const updated = await prisma.course.update({
@@ -111,6 +140,7 @@ async function updateCourse(req, res) {
         ...(level !== undefined && { level }),
         ...(mediaUrl !== undefined && { mediaUrl }),
         ...(duration !== undefined && { duration }),
+        ...(price !== undefined && { price }),
         ...(isPublished !== undefined && { isPublished }),
       },
     });
@@ -124,9 +154,8 @@ async function updateCourse(req, res) {
 
 /**
  * DELETE /api/learn/courses/:id
- * Requires auth. Only the mentor who owns the course (or admin) can delete it.
- * Blocked if learners are already enrolled — unpublish instead in that case,
- * so their progress and certificates aren't silently destroyed.
+ * Requires auth. Only the creator who owns the course (or admin) can delete it.
+ * Blocked if learners are already enrolled — unpublish instead in that case.
  */
 async function deleteCourse(req, res) {
   try {
@@ -158,11 +187,94 @@ async function deleteCourse(req, res) {
   }
 }
 
+/**
+ * GET /api/learn/my-created-courses
+ * Requires auth. Lists courses the logged-in user has submitted/created,
+ * regardless of review status — so creators can track pending/rejected ones too.
+ */
+async function getMyCreatedCourses(req, res) {
+  try {
+    const courses = await prisma.course.findMany({
+      where: { mentorId: req.user.id },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return res.status(200).json({ success: true, data: { courses } });
+  } catch (err) {
+    console.error("Get my created courses error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch your courses" });
+  }
+}
+
+// ---------- COURSE REVIEW QUEUE (ADMIN) ----------
+
+/**
+ * GET /api/learn/courses/pending
+ * Requires auth (ADMIN). Lists courses awaiting review.
+ */
+async function getPendingCourses(req, res) {
+  try {
+    const courses = await prisma.course.findMany({
+      where: { reviewStatus: "PENDING" },
+      include: { mentor: { select: { id: true, name: true, phone: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+
+    return res.status(200).json({ success: true, data: { courses } });
+  } catch (err) {
+    console.error("Get pending courses error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch pending courses" });
+  }
+}
+
+/**
+ * PATCH /api/learn/courses/:id/review
+ * Requires auth (ADMIN). Approves or rejects a submitted course.
+ * Body: { approve: true|false, rejectionReason (optional, if approve is false) }
+ * Approving publishes the course immediately (isPublished: true).
+ */
+async function reviewCourse(req, res) {
+  try {
+    const { id } = req.params;
+    const { approve, rejectionReason } = req.body;
+
+    if (approve === undefined) {
+      return res.status(400).json({ success: false, message: "approve (true/false) is required" });
+    }
+
+    const course = await prisma.course.findUnique({ where: { id } });
+    if (!course) {
+      return res.status(404).json({ success: false, message: "Course not found" });
+    }
+
+    const updated = await prisma.course.update({
+      where: { id },
+      data: {
+        reviewStatus: approve ? "APPROVED" : "REJECTED",
+        isPublished: !!approve,
+        ...(approve === false && rejectionReason !== undefined && { description: course.description }),
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: approve ? "Course approved and published" : "Course rejected",
+      data: { course: updated },
+    });
+  } catch (err) {
+    console.error("Review course error:", err);
+    return res.status(500).json({ success: false, message: "Could not review course" });
+  }
+}
+
 // ---------- ENROLLMENT & PROGRESS ----------
 
 /**
  * POST /api/learn/courses/:id/enroll
  * Requires auth. Enrolls the logged-in user into a course.
+ * - Free courses (price 0): enrollment is created with paymentStatus FREE, usable immediately.
+ * - Paid courses: enrollment is created with paymentStatus PENDING. The learner must then
+ *   call create-payment + verify-payment before progress tracking is allowed.
  */
 async function enrollInCourse(req, res) {
   try {
@@ -173,6 +285,9 @@ async function enrollInCourse(req, res) {
     if (!course) {
       return res.status(404).json({ success: false, message: "Course not found" });
     }
+    if (!course.isPublished || course.reviewStatus !== "APPROVED") {
+      return res.status(403).json({ success: false, message: "This course is not currently available" });
+    }
 
     const existing = await prisma.enrollment.findUnique({
       where: { userId_courseId: { userId, courseId } },
@@ -181,11 +296,23 @@ async function enrollInCourse(req, res) {
       return res.status(409).json({ success: false, message: "Already enrolled in this course" });
     }
 
+    const isPaid = course.price > 0;
+
     const enrollment = await prisma.enrollment.create({
-      data: { userId, courseId },
+      data: {
+        userId,
+        courseId,
+        paymentStatus: isPaid ? "PENDING" : "FREE",
+      },
     });
 
-    return res.status(201).json({ success: true, message: "Enrolled successfully", data: { enrollment } });
+    return res.status(201).json({
+      success: true,
+      message: isPaid
+        ? "Enrollment created — complete payment to start the course"
+        : "Enrolled successfully",
+      data: { enrollment, requiresPayment: isPaid, price: course.price },
+    });
   } catch (err) {
     console.error("Enroll error:", err);
     return res.status(500).json({ success: false, message: "Could not enroll in course" });
@@ -193,10 +320,110 @@ async function enrollInCourse(req, res) {
 }
 
 /**
+ * POST /api/learn/enrollments/:id/create-payment
+ * Requires auth (must own the enrollment). Creates a Razorpay order for a paid course.
+ */
+async function createEnrollmentPayment(req, res) {
+  try {
+    const { id: enrollmentId } = req.params;
+
+    const enrollment = await prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+      include: { course: true },
+    });
+    if (!enrollment) {
+      return res.status(404).json({ success: false, message: "Enrollment not found" });
+    }
+    if (enrollment.userId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "This is not your enrollment" });
+    }
+    if (enrollment.paymentStatus === "PAID") {
+      return res.status(409).json({ success: false, message: "This course is already paid for" });
+    }
+
+    const razorpayOrder = await razorpay.orders.create({
+      amount: Math.round(enrollment.course.price * 100),
+      currency: "INR",
+      receipt: enrollment.id,
+    });
+
+    await prisma.enrollment.update({
+      where: { id: enrollmentId },
+      data: { razorpayOrderId: razorpayOrder.id },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Razorpay order created",
+      data: {
+        razorpayOrderId: razorpayOrder.id,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+      },
+    });
+  } catch (err) {
+    console.error("Create enrollment payment error:", err);
+    return res.status(500).json({ success: false, message: "Could not initiate payment" });
+  }
+}
+
+/**
+ * POST /api/learn/enrollments/:id/verify-payment
+ * Requires auth (must own the enrollment).
+ * Body: { razorpayOrderId, razorpayPaymentId, razorpaySignature }
+ * Verifies the HMAC signature server-side — same pattern as marketplace payments.
+ */
+async function verifyEnrollmentPayment(req, res) {
+  try {
+    const { id: enrollmentId } = req.params;
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message: "razorpayOrderId, razorpayPaymentId, and razorpaySignature are required",
+      });
+    }
+
+    const enrollment = await prisma.enrollment.findUnique({ where: { id: enrollmentId } });
+    if (!enrollment) {
+      return res.status(404).json({ success: false, message: "Enrollment not found" });
+    }
+    if (enrollment.userId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "This is not your enrollment" });
+    }
+    if (enrollment.razorpayOrderId !== razorpayOrderId) {
+      return res.status(400).json({ success: false, message: "Razorpay order ID does not match this enrollment" });
+    }
+
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+      .digest("hex");
+
+    if (expectedSignature !== razorpaySignature) {
+      await prisma.enrollment.update({ where: { id: enrollmentId }, data: { paymentStatus: "FAILED" } });
+      return res.status(400).json({ success: false, message: "Payment verification failed" });
+    }
+
+    const updated = await prisma.enrollment.update({
+      where: { id: enrollmentId },
+      data: { paymentStatus: "PAID", razorpayPaymentId, razorpaySignature },
+    });
+
+    return res.status(200).json({ success: true, message: "Payment verified — course unlocked", data: { enrollment: updated } });
+  } catch (err) {
+    console.error("Verify enrollment payment error:", err);
+    return res.status(500).json({ success: false, message: "Could not verify payment" });
+  }
+}
+
+/**
  * PATCH /api/learn/enrollments/:id/progress
  * Requires auth. Updates progress percentage (0-100) for the caller's own enrollment.
- * When progress reaches 100: marks completedAt AND generates a PDF certificate,
- * saving its URL onto the enrollment (certificateUrl).
+ * Blocked if the course is paid and payment hasn't gone through yet.
+ * When progress reaches 100: marks completedAt AND generates a PDF certificate.
  */
 async function updateProgress(req, res) {
   try {
@@ -220,6 +447,12 @@ async function updateProgress(req, res) {
     if (enrollment.userId !== req.user.id) {
       return res.status(403).json({ success: false, message: "This is not your enrollment" });
     }
+    if (enrollment.paymentStatus === "PENDING" || enrollment.paymentStatus === "FAILED") {
+      return res.status(402).json({
+        success: false,
+        message: "Complete payment for this course before tracking progress",
+      });
+    }
 
     const isNewlyCompleted = progress === 100 && enrollment.progress !== 100;
     const completedAt = progress === 100 ? enrollment.completedAt || new Date() : null;
@@ -235,8 +468,6 @@ async function updateProgress(req, res) {
           completionDate: completedAt,
         });
       } catch (certErr) {
-        // Don't fail the whole request if PDF generation has an issue —
-        // progress should still save. Log it so it can be regenerated/debugged.
         console.error("Certificate generation error:", certErr);
       }
     }
@@ -283,7 +514,6 @@ async function getMyEnrollments(req, res) {
 /**
  * GET /api/learn/enrollments/:id/certificate
  * Requires auth. Returns the certificate URL for the caller's own completed enrollment.
- * Handy single endpoint for the frontend instead of digging through my-courses.
  */
 async function getCertificate(req, res) {
   try {
@@ -311,8 +541,7 @@ async function getCertificate(req, res) {
 
 /**
  * POST /api/learn/courses/:courseId/quiz
- * Requires auth (mentor who owns the course, or admin).
- * Creates a quiz with questions for a course.
+ * Requires auth (creator who owns the course, or admin).
  * Body: {
  *   title, passingScore (optional, default 70),
  *   questions: [{ questionText, options: ["A","B","C","D"], correctOptionIndex }]
@@ -379,8 +608,7 @@ async function createQuiz(req, res) {
 
 /**
  * GET /api/learn/courses/:courseId/quiz
- * Requires auth. Returns the quiz for a course WITHOUT correct answers
- * (so learners can't peek before attempting).
+ * Requires auth. Returns the quiz for a course WITHOUT correct answers.
  */
 async function getQuiz(req, res) {
   try {
@@ -417,7 +645,6 @@ async function getQuiz(req, res) {
 /**
  * POST /api/learn/quizzes/:id/attempt
  * Requires auth. Submits answers, auto-grades, and stores the attempt.
- * Body: { answers: [optionIndex, optionIndex, ...] } — same order as questions were created.
  */
 async function submitQuizAttempt(req, res) {
   try {
@@ -496,7 +723,6 @@ async function getMyQuizAttempts(req, res) {
 /**
  * POST /api/learn/courses/:id/review
  * Requires auth. Only learners enrolled in the course can review it.
- * Body: { rating (1-5), comment }
  */
 async function addCourseReview(req, res) {
   try {
@@ -574,7 +800,12 @@ module.exports = {
   createCourse,
   updateCourse,
   deleteCourse,
+  getMyCreatedCourses,
+  getPendingCourses,
+  reviewCourse,
   enrollInCourse,
+  createEnrollmentPayment,
+  verifyEnrollmentPayment,
   updateProgress,
   getMyEnrollments,
   getCertificate,
