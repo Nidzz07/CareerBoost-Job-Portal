@@ -16,7 +16,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List
 
-from routers.text_utils import safe_tfidf_scores
+from routers.text_utils import rank_text_candidates
 
 router = APIRouter()
 
@@ -43,21 +43,11 @@ class RecommendResponse(BaseModel):
 
 
 def rank_candidates(user_profile_text: str, candidates: List[Candidate], limit: int):
-    if not candidates or limit <= 0:
-        return []
-
-    scores = safe_tfidf_scores(user_profile_text, [c.text for c in candidates])
-    if scores is None:
-        return []
-
-    ranked = sorted(
-        zip(candidates, scores), key=lambda pair: pair[1], reverse=True
-    )
-
     return [
-        RecommendationItem(id=c.id, score=round(float(s), 4))
-        for c, s in ranked[:limit]
-        if s > 0  # don't recommend completely irrelevant items
+        RecommendationItem(id=candidates[index].id, score=round(float(score), 4))
+        for index, score in rank_text_candidates(
+            user_profile_text, [candidate.text for candidate in candidates], limit
+        )
     ]
 
 

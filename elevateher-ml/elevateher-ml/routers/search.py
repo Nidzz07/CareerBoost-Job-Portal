@@ -13,7 +13,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List
 
-from routers.text_utils import safe_tfidf_scores
+from routers.text_utils import rank_text_candidates
 
 router = APIRouter()
 
@@ -40,19 +40,11 @@ class SearchResponse(BaseModel):
 
 @router.post("", response_model=SearchResponse)
 def search(payload: SearchRequest):
-    if not payload.candidates or not payload.query.strip() or payload.limit <= 0:
-        return SearchResponse(results=[])
-
-    scores = safe_tfidf_scores(payload.query, [c.text for c in payload.candidates])
-    if scores is None:
-        return SearchResponse(results=[])
-
-    ranked = sorted(zip(payload.candidates, scores), key=lambda pair: pair[1], reverse=True)
-
     results = [
-        SearchResultItem(id=c.id, score=round(float(s), 4))
-        for c, s in ranked[: payload.limit]
-        if s > 0
+        SearchResultItem(id=payload.candidates[index].id, score=round(float(score), 4))
+        for index, score in rank_text_candidates(
+            payload.query, [candidate.text for candidate in payload.candidates], payload.limit
+        )
     ]
 
     return SearchResponse(results=results)
