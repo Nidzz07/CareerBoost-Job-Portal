@@ -26,6 +26,21 @@ Auth/Onboarding + Learn module — built with Node.js, Express, PostgreSQL (Pris
 
 Server runs at `http://localhost:5000`. Health check: `GET /health`.
 
+## Optional ML Service Configuration
+
+The backend can call the FastAPI ML service through an internal wrapper. If these
+environment variables are not set, local defaults are used:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ML_SERVICE_URL` | `http://localhost:8000` | Base URL for the ML service |
+| `ML_TIMEOUT_MS` | `1500` | Timeout for ML requests before falling back |
+
+When using Docker Compose, the backend uses `ML_SERVICE_URL=http://ml:8000` so it
+can reach the ML container by service name. If the ML service is unavailable, the
+backend wrapper logs the failure and returns safe fallback values so existing API
+responses can keep using database ordering.
+
 ## API Endpoints
 
 ### Auth / Onboarding
