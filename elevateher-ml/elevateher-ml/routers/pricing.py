@@ -43,6 +43,9 @@ class PricingResponse(BaseModel):
 def estimate_price(category: str, material_cost: float, hours_of_work: float):
     rates = CATEGORY_RATES.get(category.lower(), CATEGORY_RATES["default"])
 
+    material_cost = max(material_cost, 0)
+    hours_of_work = max(hours_of_work, 0)
+
     labor_cost = hours_of_work * rates["hourly_rate"]
     base_cost = material_cost + labor_cost
     suggested = base_cost * rates["markup"]

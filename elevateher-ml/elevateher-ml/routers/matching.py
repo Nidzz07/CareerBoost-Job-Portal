@@ -20,8 +20,8 @@ service runnable fully offline for now.
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+
+from routers.text_utils import normalize_text, safe_tfidf_scores
 
 router = APIRouter()
 
@@ -41,11 +41,11 @@ def keyword_overlap_ratio(skills: List[str], job_text: str) -> float:
     if not skills:
         return 0.0
 
-    job_words = set(job_text.lower().split())
+    job_words = set(normalize_text(job_text).split())
     matched = 0
 
     for skill in skills:
-        skill_words = skill.lower().split()
+        skill_words = normalize_text(skill).split()
         if any(word in job_words for word in skill_words):
             matched += 1
 
@@ -56,9 +56,8 @@ def tfidf_similarity(skills_text: str, job_text: str) -> float:
     if not skills_text or not job_text:
         return 0.0
 
-    vectorizer = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform([skills_text, job_text])
-    return float(cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0])
+    scores = safe_tfidf_scores(skills_text, [job_text])
+    return scores[0] if scores is not None else 0.0
 
 
 @router.post("/job-score", response_model=MatchResponse)

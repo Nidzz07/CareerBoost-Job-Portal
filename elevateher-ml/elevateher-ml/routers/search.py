@@ -12,8 +12,8 @@ matches, so typos/phrasing differences still surface good results.
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+
+from routers.text_utils import safe_tfidf_scores
 
 router = APIRouter()
 
@@ -40,18 +40,12 @@ class SearchResponse(BaseModel):
 
 @router.post("", response_model=SearchResponse)
 def search(payload: SearchRequest):
-    if not payload.candidates or not payload.query.strip():
+    if not payload.candidates or not payload.query.strip() or payload.limit <= 0:
         return SearchResponse(results=[])
 
-    corpus = [payload.query] + [c.text for c in payload.candidates]
-
-    vectorizer = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform(corpus)
-
-    query_vector = tfidf_matrix[0:1]
-    candidate_vectors = tfidf_matrix[1:]
-
-    scores = cosine_similarity(query_vector, candidate_vectors)[0]
+    scores = safe_tfidf_scores(payload.query, [c.text for c in payload.candidates])
+    if scores is None:
+        return SearchResponse(results=[])
 
     ranked = sorted(zip(payload.candidates, scores), key=lambda pair: pair[1], reverse=True)
 

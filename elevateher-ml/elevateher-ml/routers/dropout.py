@@ -38,6 +38,10 @@ class PredictResponse(BaseModel):
 
 
 def calculate_risk_score(progress: int, days_inactive: int, enrolled_days_ago: int) -> float:
+    progress = min(max(progress, 0), 100)
+    days_inactive = max(days_inactive, 0)
+    enrolled_days_ago = max(enrolled_days_ago, 0)
+
     # Expected progress if the learner were pacing steadily (assume ~30 day avg course length)
     expected_progress = min((enrolled_days_ago / 30) * 100, 100)
     progress_gap = max(expected_progress - progress, 0) / 100  # 0 to 1, higher = further behind
@@ -54,6 +58,7 @@ def calculate_risk_score(progress: int, days_inactive: int, enrolled_days_ago: i
 @router.post("/at-risk-learners", response_model=PredictResponse)
 def predict_at_risk_learners(payload: PredictRequest):
     at_risk = []
+    risk_threshold = min(max(payload.riskThreshold, 0), 1)
 
     for enrollment in payload.enrollments:
         score = calculate_risk_score(
@@ -61,7 +66,7 @@ def predict_at_risk_learners(payload: PredictRequest):
             enrollment.daysSinceLastActivity,
             enrollment.enrolledDaysAgo,
         )
-        if score >= payload.riskThreshold:
+        if score >= risk_threshold:
             at_risk.append(AtRiskItem(enrollmentId=enrollment.enrollmentId, riskScore=score))
 
     at_risk.sort(key=lambda item: item.riskScore, reverse=True)
