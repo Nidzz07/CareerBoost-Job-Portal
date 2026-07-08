@@ -1,37 +1,88 @@
-"""
-Feature 9: Skill Extractor from Bio Text
-Approach: keyword matching against a known skills dictionary - takes a free-text bio
-(e.g. "I have been sewing clothes for 5 years and also know basic computer work") and
-pulls out recognized skills ("tailoring", "basic computer") automatically.
+"""Deterministic offline skill extraction from free-text bios."""
 
-Use case: onboarding - instead of asking users to pick skills from a dropdown (extra
-friction for low-literacy users), let them type/speak a short bio in their own words and
-auto-extract structured skills for matching against jobs/courses.
-
-UPGRADE PATH: Expand SKILL_DICTIONARY over time based on real user bios you see, or
-replace with a trained NER (Named Entity Recognition) model once you have labeled data.
-"""
-
+import re
 from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import List
+from typing import Dict, List, Sequence, Tuple
+
+from routers.text_utils import domain_synonym_terms, normalize_ranking_text
 
 router = APIRouter()
 
-# Maps a canonical skill name -> list of words/phrases that indicate it in free text.
-# Expand this list as you see real bios come in.
-SKILL_DICTIONARY = {
-    "tailoring": ["sewing", "stitching", "tailor", "clothes making", "blouse", "embroidery"],
-    "weaving": ["weaving", "handloom", "textile"],
-    "pottery": ["pottery", "clay", "ceramics", "pot making"],
-    "cooking": ["cooking", "baking", "food preparation", "catering", "recipes"],
-    "english_speaking": ["english speaking", "spoken english", "english fluent"],
-    "basic_computer": ["computer", "typing", "ms word", "ms excel", "excel", "internet"],
-    "childcare": ["babysitting", "childcare", "nanny", "child care"],
-    "teaching": ["teaching", "tutor", "tuition", "mentoring"],
-    "beauty_wellness": ["beautician", "makeup", "salon", "mehendi", "henna"],
-    "receptionist_admin": ["receptionist", "front desk", "office assistant", "data entry"],
+
+def _tailoring_variants() -> Tuple[str, ...]:
+    # P1 groups embroidery with tailoring for recall, but extraction exposes it separately.
+    shared_terms = domain_synonym_terms("tailoring")
+    return tuple(term for term in shared_terms if term != "embroidery") + (
+        "tailor",
+        "clothes making",
+    )
+
+
+# Canonical display name -> phrases found in user bios. Declaration order is output order.
+SKILL_DICTIONARY: Dict[str, Sequence[str]] = {
+    "Computer Basics": ("computer basics", "basic computer", "computer"),
+    "MS Word": ("ms word", "microsoft word", "word processing"),
+    "MS Excel": ("ms excel", "microsoft excel", "excel"),
+    "PowerPoint": ("powerpoint", "power point", "ms powerpoint"),
+    "Typing": ("typing work", "typing"),
+    "Data Entry": ("data entry", "computer operator"),
+    "Digital Marketing": ("digital marketing", "online marketing", "seo"),
+    "Social Media": ("social media", "social media management"),
+    "Content Writing": ("content writing", "content writer", "copywriting"),
+    "Customer Support": ("customer support", "customer service", "call centre", "call center"),
+    "Sales": ("sales", "selling", "salesperson"),
+    "Retail": ("retail", "shop assistant", "store assistant"),
+    "Accounting": ("accounting", "accounts"),
+    "Bookkeeping": ("bookkeeping", "book keeping", "billing"),
+    "Tally": ("tally", "tally erp"),
+    "Tailoring": _tailoring_variants(),
+    "Embroidery": ("embroidery", "embroidering"),
+    "Knitting": ("knitting", "knitwear"),
+    "Crochet": ("crochet", "crocheting"),
+    "Beauty": ("beauty", "beauty services", "salon"),
+    "Beautician": ("beautician", "beauty therapist"),
+    "Hair Styling": ("hair styling", "hair stylist", "hair cutting"),
+    "Mehendi": ("mehendi", "mehndi", "henna"),
+    "Makeup": ("makeup", "make up", "makeup artist"),
+    "Cooking": ("cooking", "cook", "catering"),
+    "Baking": ("baking", "baker", "bakery"),
+    "Food Preparation": ("food preparation", "food prep", "kitchen assistant"),
+    "Pottery": ("pottery", "pot making", "ceramics", "clay work"),
+    "Painting": ("painting", "painter"),
+    "Weaving": ("weaving", "handloom"),
+    "Crafts": ("crafts", "craft making"),
+    "Handicrafts": ("handicrafts", "handmade products", "artisan work"),
+    "Jewellery Making": ("jewellery making", "jewelry making", "jewellery design"),
+    "Teaching": ("teaching", "teacher", "mentoring"),
+    "Tutor": ("home tutor", "tutor", "tuition"),
+    "Childcare": ("childcare", "child care", "babysitting", "nanny"),
+    "Caregiver": ("caregiver", "care giving", "elder care"),
+    "Nursing Assistant": ("nursing assistant", "nurse assistant", "patient care"),
+    "Machine Operator": ("machine operator", "machine operation"),
+    "Electrician": ("electrician", "electrical work", "wiring"),
+    "Plumbing": ("plumbing", "plumber"),
+    "Driving": ("driving", "driver"),
+    "Entrepreneurship": ("entrepreneurship", "entrepreneur", "self employed"),
+    "Business": ("business", "small business", "business management"),
+    "Communication": ("communication", "communication skills"),
+    "Leadership": ("leadership", "team leader"),
+    "English Speaking": ("english speaking", "spoken english", "speak english"),
+    "Interview Skills": ("interview skills", "interview preparation"),
+    "Problem Solving": ("problem solving", "problem-solving"),
+    "Teamwork": ("teamwork", "team work"),
+    "Time Management": ("time management", "manage time"),
 }
+
+_SKILL_ORDER = {skill: index for index, skill in enumerate(SKILL_DICTIONARY)}
+_ALIASES = sorted(
+    (
+        (normalize_ranking_text(alias), canonical)
+        for canonical, aliases in SKILL_DICTIONARY.items()
+        for alias in aliases
+    ),
+    key=lambda item: (-len(item[0].split()), -len(item[0]), _SKILL_ORDER[item[1]]),
+)
 
 
 class ExtractSkillsRequest(BaseModel):
@@ -44,11 +95,19 @@ class ExtractSkillsResponse(BaseModel):
 
 @router.post("/skills-from-bio", response_model=ExtractSkillsResponse)
 def extract_skills_from_bio(payload: ExtractSkillsRequest):
-    text_lower = payload.bioText.lower()
-    found_skills = []
+    text = normalize_ranking_text(payload.bioText)
+    matches: List[Tuple[int, int, str]] = []
 
-    for canonical_skill, keywords in SKILL_DICTIONARY.items():
-        if any(keyword in text_lower for keyword in keywords):
-            found_skills.append(canonical_skill)
+    # Prefer longer phrases at an overlapping position ("computer operator" over "computer").
+    for alias, canonical_skill in _ALIASES:
+        for match in re.finditer(rf"(?<!\w){re.escape(alias)}(?!\w)", text):
+            span = match.span()
+            if any(span[0] < end and start < span[1] for start, end, _ in matches):
+                continue
+            matches.append((span[0], span[1], canonical_skill))
 
-    return ExtractSkillsResponse(extractedSkills=found_skills)
+    found = {canonical_skill for _, _, canonical_skill in matches}
+    extracted_skills = [
+        canonical_skill for canonical_skill in SKILL_DICTIONARY if canonical_skill in found
+    ]
+    return ExtractSkillsResponse(extractedSkills=extracted_skills)

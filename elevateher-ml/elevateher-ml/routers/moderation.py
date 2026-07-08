@@ -1,27 +1,81 @@
-"""
-Content Moderation
-Approach: rule-based keyword flagging for text (transparent, no training data needed).
-Image moderation is stubbed - real image classification needs either a pretrained
-vision model (download requires internet access) or a paid moderation API.
+"""Deterministic, offline content moderation."""
 
-UPGRADE PATH:
-- Text: replace keyword matching with a trained text classifier (e.g. scikit-learn
-  Naive Bayes on labeled examples) once you have real flagged/unflagged examples.
-- Image: integrate a vision moderation API (e.g. AWS Rekognition, Google Vision
-  SafeSearch) - swap the stub in moderate_image() for a real API call.
-"""
-
+import re
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from routers.text_utils import normalize_ranking_text
+
 router = APIRouter()
 
-# Starter red-flag keyword list for job postings - expand based on real moderation needs.
-RED_FLAG_KEYWORDS = [
-    "no breaks", "24/7", "unpaid", "no salary", "advance payment required",
-    "send money", "registration fee", "processing fee", "guaranteed income",
+RED_FLAG_PHRASES = (
+    "work without pay",
+    "unpaid",
+    "unpaid internship",
+    "no salary",
+    "salary nahi",
+    "no breaks",
+    "24 7",
+    "24 7 work",
+    "advance payment",
+    "advance payment required",
+    "pay advance",
+    "send money",
+    "deposit required",
+    "security deposit required",
+    "registration fee",
+    "processing fee",
+    "joining fee",
+    "pay first",
+    "paisa jama",
+    "paise jama",
+    "otp fraud",
+    "share otp",
+    "send otp",
+    "fake job offer",
+    "guaranteed job",
+    "investment scam",
+    "investment scheme guaranteed",
+    "guaranteed income",
+    "guaranteed earning",
+    "fake earning",
+    "free earning",
+    "free money",
+    "whatsapp only",
+    "only whatsapp",
+    "contact on whatsapp only",
+    "wa me",
+    "telegram job",
+    "telegram earning",
+    "join telegram",
     "work from home no experience high pay",
-]
+    "ghar se kaam guaranteed income",
+    "ghar se kaam paisa jama",
+    "mehnat ke paise nahi",
+)
+
+_OBFUSCATION_TRANSLATION = str.maketrans(
+    {
+        "0": "o",
+        "1": "i",
+        "3": "e",
+        "4": "a",
+        "5": "s",
+        "7": "t",
+        "@": "a",
+        "¥": "y",
+    }
+)
+
+
+def normalize_moderation_text(value: str) -> str:
+    text = str(value or "").lower().translate(_OBFUSCATION_TRANSLATION)
+    text = re.sub(r"\bwa\s*[./_-]\s*me\b", "wa me", text)
+    return normalize_ranking_text(text)
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
 
 
 class TextModerationRequest(BaseModel):
@@ -41,9 +95,8 @@ class ModerationResponse(BaseModel):
 
 @router.post("/text", response_model=ModerationResponse)
 def moderate_text(payload: TextModerationRequest):
-    text_lower = payload.text.lower()
-
-    matched = [kw for kw in RED_FLAG_KEYWORDS if kw in text_lower]
+    text = normalize_moderation_text(payload.text)
+    matched = [phrase for phrase in RED_FLAG_PHRASES if _contains_phrase(text, phrase)]
 
     if matched:
         return ModerationResponse(
