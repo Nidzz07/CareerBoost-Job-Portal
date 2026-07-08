@@ -102,7 +102,39 @@ function logMlError({ endpoint, durationMs, error, status }) {
   });
 }
 
-async function requestMl(endpoint, payload, fallbackValue) {
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasNumber(value, key) {
+  return typeof value[key] === "number" && Number.isFinite(value[key]);
+}
+
+function hasBoolean(value, key) {
+  return typeof value[key] === "boolean";
+}
+
+function hasString(value, key) {
+  return typeof value[key] === "string";
+}
+
+function hasArray(value, key) {
+  return Array.isArray(value[key]);
+}
+
+function validateMlResponse(endpoint, value, isValidResponse, fallbackValue) {
+  if (!isValidResponse || isValidResponse(value)) {
+    return value;
+  }
+
+  console.error("ML service returned unexpected response shape", {
+    endpoint,
+    mlServiceUrl: ML_SERVICE_URL,
+  });
+  return fallbackValue;
+}
+
+async function requestMl(endpoint, payload, fallbackValue, isValidResponse) {
   const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -119,7 +151,8 @@ async function requestMl(endpoint, payload, fallbackValue) {
       throw new Error(`ML service responded with HTTP ${response.status}`);
     }
 
-    return await response.json();
+    const data = await response.json();
+    return validateMlResponse(endpoint, data, isValidResponse, fallbackValue);
   } catch (error) {
     logMlError({
       endpoint,
@@ -134,19 +167,118 @@ async function requestMl(endpoint, payload, fallbackValue) {
 }
 
 async function recommendCourses(payload) {
-  return requestMl("/recommend/courses", payload, { recommendations: [] });
+  return requestMl(
+    "/recommend/courses",
+    payload,
+    { recommendations: [] },
+    (value) => isObject(value) && hasArray(value, "recommendations")
+  );
 }
 
 async function recommendJobs(payload) {
-  return requestMl("/recommend/jobs", payload, { recommendations: [] });
+  return requestMl(
+    "/recommend/jobs",
+    payload,
+    { recommendations: [] },
+    (value) => isObject(value) && hasArray(value, "recommendations")
+  );
 }
 
 async function search(payload) {
-  return requestMl("/search", payload, { results: [] });
+  return requestMl(
+    "/search",
+    payload,
+    { results: [] },
+    (value) => isObject(value) && hasArray(value, "results")
+  );
 }
 
 async function matchJobScore(payload) {
-  return requestMl("/match/job-score", payload, { matchScore: 0.0 });
+  return requestMl(
+    "/match/job-score",
+    payload,
+    { matchScore: 0.0 },
+    (value) => isObject(value) && hasNumber(value, "matchScore")
+  );
+}
+
+async function extractSkillsFromBio(payload) {
+  return requestMl(
+    "/extract/skills-from-bio",
+    payload,
+    { extractedSkills: [] },
+    (value) => isObject(value) && hasArray(value, "extractedSkills")
+  );
+}
+
+async function suggestPrice(payload) {
+  return requestMl("/pricing/suggest", payload, {
+    suggestedPriceMin: 0,
+    suggestedPriceMax: 0,
+    suggestedPrice: 0,
+  }, (value) =>
+    isObject(value)
+    && hasNumber(value, "suggestedPriceMin")
+    && hasNumber(value, "suggestedPriceMax")
+    && hasNumber(value, "suggestedPrice")
+  );
+}
+
+async function moderateText(payload) {
+  return requestMl(
+    "/moderate/text",
+    payload,
+    { flagged: false, reason: "", confidence: 0.0 },
+    (value) =>
+      isObject(value)
+      && hasBoolean(value, "flagged")
+      && hasString(value, "reason")
+      && hasNumber(value, "confidence")
+  );
+}
+
+async function moderateImage(payload) {
+  return requestMl("/moderate/image", payload, {
+    flagged: false,
+    reason: "Image moderation not yet implemented - passed by default",
+    confidence: 0.0,
+  }, (value) =>
+    isObject(value)
+    && hasBoolean(value, "flagged")
+    && hasString(value, "reason")
+    && hasNumber(value, "confidence")
+  );
+}
+
+async function generateDescription(payload) {
+  return requestMl(
+    "/generate/description",
+    payload,
+    { title: "", description: "" },
+    (value) => isObject(value) && hasString(value, "title") && hasString(value, "description")
+  );
+}
+
+async function predictAtRiskLearners(payload) {
+  return requestMl(
+    "/predict/at-risk-learners",
+    payload,
+    { atRisk: [] },
+    (value) => isObject(value) && hasArray(value, "atRisk")
+  );
+}
+
+async function analyzeReviewSentiment(payload) {
+  return requestMl("/sentiment/reviews", payload, {
+    overallScore: 0.0,
+    trustLabel: "Mixed feedback",
+    results: [],
+  }, (value) =>
+    isObject(value)
+    && hasNumber(value, "overallScore")
+    && hasString(value, "trustLabel")
+    && hasArray(value, "results")
+  );
 }
 
 async function healthCheck() {
@@ -176,10 +308,17 @@ module.exports = {
   buildJobCandidate,
   buildProductCandidate,
   buildUserProfileText,
+  analyzeReviewSentiment,
+  extractSkillsFromBio,
+  generateDescription,
   healthCheck,
   matchJobScore,
+  moderateImage,
+  moderateText,
   orderByMlIds,
+  predictAtRiskLearners,
   recommendCourses,
   recommendJobs,
   search,
+  suggestPrice,
 };
