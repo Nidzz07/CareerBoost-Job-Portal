@@ -1,8 +1,6 @@
 # Run with: docker-compose up --build
-# Spins up backend + Postgres together for production-style testing.
-# For everyday dev with SQLite, just use `npm run dev` - no Docker needed.
-
-version: "3.8"
+# Spins up backend + Postgres + ML together for production-style testing.
+# For everyday dev against a local PostgreSQL database, use `npm run dev`.
 
 services:
   backend:
@@ -15,10 +13,21 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=7d
       - DATABASE_URL=postgresql://elevateher:elevateher@postgres:5432/elevateher
+      - ML_SERVICE_URL=http://ml:8000
+      - ML_TIMEOUT_MS=1500
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      ml:
+        condition: service_started
     volumes:
       - uploads_data:/app/uploads
+
+  ml:
+    build:
+      context: ../elevateher-ml/elevateher-ml
+    ports:
+      - "8000:8000"
 
   postgres:
     image: postgres:16-alpine
@@ -29,6 +38,12 @@ services:
       - POSTGRES_DB=elevateher
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U elevateher -d elevateher"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

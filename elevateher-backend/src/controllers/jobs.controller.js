@@ -1,4 +1,10 @@
 const prisma = require("../config/prisma");
+const {
+  buildJobCandidate,
+  matchJobScore,
+  orderByMlIds,
+  recommendJobs,
+} = require("../services/ml.service");
 
 /**
  * GET /api/jobs
@@ -9,7 +15,7 @@ async function listJobs(req, res) {
   try {
     const { category, location, jobType } = req.query;
 
-    const jobs = await prisma.job.findMany({
+    let jobs = await prisma.job.findMany({
       where: {
         isActive: true,
         ...(category && { category }),
@@ -23,6 +29,40 @@ async function listJobs(req, res) {
       },
       orderBy: { createdAt: "desc" },
     });
+
+    const profileParts = [category, location, jobType].filter(Boolean);
+    const profileText = profileParts.join(" ");
+    if (profileText && jobs.length > 0) {
+      const mlResult = await recommendJobs({
+        userId: "anonymous",
+        userProfileText: profileText,
+        candidates: jobs.map(buildJobCandidate),
+        limit: jobs.length,
+      });
+      jobs = orderByMlIds(
+        jobs,
+        Array.isArray(mlResult.recommendations)
+          ? mlResult.recommendations.map((item) => item.id)
+          : []
+      );
+
+      if (category) {
+        const scoredJobs = await Promise.all(
+          jobs.map(async (job, index) => {
+            const result = await matchJobScore({
+              userSkills: [category],
+              jobTitle: job.title,
+              jobDescription: job.description,
+            });
+            const score = Number.isFinite(result.matchScore) ? result.matchScore : 0;
+            return { job, index, score };
+          })
+        );
+        jobs = scoredJobs
+          .sort((a, b) => b.score - a.score || a.index - b.index)
+          .map(({ job }) => job);
+      }
+    }
 
     return res.status(200).json({ success: true, data: { jobs } });
   } catch (err) {

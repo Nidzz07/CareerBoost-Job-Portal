@@ -15,8 +15,8 @@ passed in by the backend in the request body - this stays framework-agnostic eit
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+
+from routers.text_utils import rank_text_candidates
 
 router = APIRouter()
 
@@ -43,28 +43,11 @@ class RecommendResponse(BaseModel):
 
 
 def rank_candidates(user_profile_text: str, candidates: List[Candidate], limit: int):
-    if not candidates:
-        return []
-
-    corpus = [user_profile_text] + [c.text for c in candidates]
-
-    vectorizer = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform(corpus)
-
-    # First row = user profile, rest = candidates
-    user_vector = tfidf_matrix[0:1]
-    candidate_vectors = tfidf_matrix[1:]
-
-    scores = cosine_similarity(user_vector, candidate_vectors)[0]
-
-    ranked = sorted(
-        zip(candidates, scores), key=lambda pair: pair[1], reverse=True
-    )
-
     return [
-        RecommendationItem(id=c.id, score=round(float(s), 4))
-        for c, s in ranked[:limit]
-        if s > 0  # don't recommend completely irrelevant items
+        RecommendationItem(id=candidates[index].id, score=round(float(score), 4))
+        for index, score in rank_text_candidates(
+            user_profile_text, [candidate.text for candidate in candidates], limit
+        )
     ]
 
 

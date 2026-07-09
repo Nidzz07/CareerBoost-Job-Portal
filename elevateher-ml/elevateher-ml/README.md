@@ -1,7 +1,8 @@
 # ElevateHer ML Service
 
-Python/FastAPI service implementing 9 ML features. Runs fully offline - no API keys or
-model downloads needed to get started, so it's ready to demo immediately.
+Python/FastAPI service for the CareerBoost/ElevateHer backend. It runs fully
+offline by default: no API keys, online models, or model downloads are required
+for local development or demos.
 
 ## Setup
 
@@ -10,55 +11,71 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-Interactive API docs (auto-generated, test endpoints directly in browser): `http://localhost:8000/docs`
+Interactive API docs: `http://localhost:8000/docs`
 
-## What's implemented (and how, honestly)
+## Implemented Capabilities
 
-| Feature | Approach used now | Upgrade path later |
+| Capability | Current approach | Upgrade path later |
 |---|---|---|
-| Course/Job Recommender | TF-IDF + cosine similarity (content-based) | Add collaborative filtering once you have real user interaction data |
-| Skill-to-Job Matching | Keyword overlap (65%) + TF-IDF similarity (35%) blend | Swap for sentence-transformers embeddings (needs internet to download model) for true semantic understanding |
-| Fair Pricing Assistant | Transparent formula (material + labor + category markup) | Train a real regression model once you have real sale price data |
-| Content Moderation (text) | Keyword-based rule matching | Train a text classifier once you have labeled flagged/unflagged examples |
-| Content Moderation (image) | Stub (always passes) | Integrate a vision moderation API (AWS Rekognition / Google Vision SafeSearch) |
-| Auto-Listing Generator | Template-based text filling (English + Hindi) | Swap for a real LLM API call (commented example included in generation.py) |
-| Dropout Prediction | Rule-based risk score (progress pace + inactivity) | Train a classifier once you have historical dropout data |
-| **Review Sentiment Analysis** *(new)* | Lexicon-based (positive/negative word lists) | Train a classifier on real labeled reviews |
-| **Natural-Language Search** *(new)* | TF-IDF + cosine similarity on a free-text query | Same upgrade path as recommender - embeddings for true semantic search |
-| **Skill Extraction from Bio** *(new)* | Keyword dictionary matching | Replace with a trained NER model once you have labeled bios |
+| Course Recommendation | TF-IDF + cosine similarity over backend-provided candidates | Add collaborative filtering when interaction data exists |
+| Job Recommendation | TF-IDF + cosine similarity over backend-provided candidates | Add collaborative filtering or embeddings later |
+| Natural-Language Search | TF-IDF + cosine similarity over backend-provided candidates | Replace ranker with embeddings if online/model hosting is added |
+| Skill-to-Job Matching | 72% phrase/synonym matching + 28% TF-IDF, plus title boost | Replace scoring internals while keeping the API contract |
+| Skill Extraction | Keyword dictionary matching from bio text | Train NER/classifier once labeled bios exist |
+| Fair Pricing Assistant | Deterministic material + labor + category markup formula | Train a regression model once real sales data exists |
+| Text Moderation | Keyword/rule-based suspicious phrase detection | Train a classifier with labeled moderation examples |
+| Image Moderation | Stub that always passes | Integrate a real vision moderation provider if required |
+| Product Description Generation | Offline English/Hindi templates | Swap internals for an LLM while keeping the same schema |
+| Review Sentiment Analysis | Lexicon and phrase based review scoring | Train a classifier on labeled reviews |
+| Dropout Prediction | Rule-based progress/inactivity risk scoring | Train a classifier with historical learner data |
 
-**Why this approach:** every "upgrade path" is a drop-in replacement - the request/response
-shape (the API contract) doesn't change. This means the backend integration code you write now
-will keep working even after the ML logic gets smarter later.
+## Offline-First Architecture
 
-**Matching score note:** the skill-to-job matching score was tuned to blend direct keyword
-overlap (65%) with TF-IDF topical similarity (35%) - pure TF-IDF cosine similarity tends to
-under-score genuinely good matches on short skill lists (common words get down-weighted by
-IDF), so the blend gives scores that better match human intuition about "how good is this fit".
+Every endpoint is deterministic and local-first. The service accepts all data it
+needs in the request body, usually candidate lists assembled by the backend from
+PostgreSQL. This keeps the ML service stateless and lets the backend stay the
+source of truth for users, courses, jobs, products, and enrollments.
+
+The intended upgrade path is to replace internals behind the same request and
+response models. Backend contracts should not need to change when smarter models
+are introduced.
+
+## Backend Integration
+
+The Express backend calls this service through `src/services/ml.service.js`.
+That wrapper centralizes timeouts, logging, response-shape checks, and fallback
+values. In Docker Compose, the backend uses `ML_SERVICE_URL=http://ml:8000`.
+
+Recommendation, search, and job matching are used inside existing backend
+listing flows. Skill extraction, pricing, moderation, generation, sentiment, and
+dropout prediction are exposed through backend `/api/ml/...` passthrough routes.
+
+## Matching Algorithm
+
+`POST /match/job-score` combines:
+
+- 72% direct phrase and domain synonym matching across user skills.
+- 28% TF-IDF topical similarity between user skills and job text.
+- A small title boost when a skill or synonym appears in the job title.
+
+This avoids pure TF-IDF under-scoring short skill lists while still preserving a
+topical similarity signal.
 
 ## Endpoints
 
-- `POST /recommend/courses` - rank candidate courses by relevance to user profile
-- `POST /recommend/jobs` - rank candidate jobs by relevance to user profile
-- `POST /match/job-score` - similarity score between user skills and a job
-- `POST /pricing/suggest` - suggested price range for a handmade product
-- `POST /moderate/text` - flags potentially exploitative/suspicious text
-- `POST /moderate/image` - stub, always passes for now
-- `POST /generate/description` - auto-generates a product title + description
-- `POST /predict/at-risk-learners` - flags learners at risk of dropping out
-- `POST /sentiment/reviews` - analyzes review text, returns sentiment + trust label *(new)*
-- `POST /search` - ranks candidates (courses/jobs/products) against a free-text search query *(new)*
-- `POST /extract/skills-from-bio` - extracts structured skills from a free-text bio *(new)*
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/recommend/courses` | Rank candidate courses by relevance to a user profile |
+| POST | `/recommend/jobs` | Rank candidate jobs by relevance to a user profile |
+| POST | `/search` | Rank candidate courses/jobs/products against a free-text query |
+| POST | `/match/job-score` | Score fit between user skills and one job |
+| POST | `/extract/skills-from-bio` | Extract structured skills from bio text |
+| POST | `/pricing/suggest` | Suggest a handmade product price range |
+| POST | `/moderate/text` | Flag suspicious or exploitative text |
+| POST | `/moderate/image` | Stub image moderation, passes by default |
+| POST | `/generate/description` | Generate product title and description |
+| POST | `/sentiment/reviews` | Analyze review sentiment and trust label |
+| POST | `/predict/at-risk-learners` | Return enrollments at or above a dropout risk threshold |
 
-## Example requests
-
-See `test_examples.sh` for working curl commands for every endpoint (also useful for the
-backend teammate to see exact request shapes).
-
-## Note on the /recommend and /search endpoints
-
-Both need the backend to pass a `candidates` array (id + text) in the request - content-based
-ranking needs the candidate pool to rank against. The backend should query its own DB for
-published/open courses, jobs, or products, build a short text per item (category + title +
-description), and send that list along with the user's profile text or search query.
-
+See `test_examples.sh` for curl examples using the current request and response
+schemas.

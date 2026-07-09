@@ -40,17 +40,28 @@ TEMPLATES = {
         "title": "हस्तनिर्मित {keywords_joined} {category}",
         "description": (
             "यह एक खूबसूरत हस्तनिर्मित {category} है जिसमें {keywords_joined} शामिल है। "
-            "हर उत्पाद पारंपरिक कारीगरी से बनाया गया है - घर की सजावट या उपहार के लिए बिल्कुल सही।"
+            "हर उत्पाद पारंपरिक कारीगरी और देखभाल से बनाया गया है - "
+            "घर की सजावट या उपहार के लिए बिल्कुल सही।"
         ),
     },
 }
 
 
 def generate_with_template(keywords: List[str], category: str, language: str):
-    template = TEMPLATES.get(language, TEMPLATES["en"])
-    keywords_joined = ", ".join(keywords) if keywords else category
+    language = language if language in TEMPLATES else "en"
+    category = category.strip() if category and category.strip() else ("उत्पाद" if language == "hi" else "product")
+    cleaned_keywords = [keyword.strip() for keyword in keywords if keyword and keyword.strip()]
+    has_keywords = bool(cleaned_keywords)
+    keywords_joined = ", ".join(cleaned_keywords) if has_keywords else category
 
-    title = template["title"].format(keywords_joined=keywords_joined.title(), category=category.title())
+    template = TEMPLATES[language]
+    title_keywords = keywords_joined if language == "hi" else keywords_joined.title()
+    title_category = category if language == "hi" else category.title()
+
+    if has_keywords:
+        title = template["title"].format(keywords_joined=title_keywords, category=title_category)
+    else:
+        title = f"हस्तनिर्मित {title_category}" if language == "hi" else f"Handcrafted {title_category}"
     description = template["description"].format(keywords_joined=keywords_joined, category=category)
 
     return title, description

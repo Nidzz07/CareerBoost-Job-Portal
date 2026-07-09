@@ -1,6 +1,11 @@
 const crypto = require("crypto");
 const prisma = require("../config/prisma");
 const razorpay = require("../config/razorpay");
+const {
+  buildProductCandidate,
+  orderByMlIds,
+  search,
+} = require("../services/ml.service");
 
 // ---------- PRODUCTS ----------
 
@@ -13,7 +18,7 @@ async function listProducts(req, res) {
   try {
     const { category, sellerId } = req.query;
 
-    const products = await prisma.product.findMany({
+    let products = await prisma.product.findMany({
       where: {
         isActive: true,
         ...(category && { category }),
@@ -24,6 +29,20 @@ async function listProducts(req, res) {
       },
       orderBy: { createdAt: "desc" },
     });
+
+    if (category && products.length > 0) {
+      const mlResult = await search({
+        query: category,
+        candidates: products.map(buildProductCandidate),
+        limit: products.length,
+      });
+      products = orderByMlIds(
+        products,
+        Array.isArray(mlResult.results)
+          ? mlResult.results.map((item) => item.id)
+          : []
+      );
+    }
 
     return res.status(200).json({ success: true, data: { products } });
   } catch (err) {

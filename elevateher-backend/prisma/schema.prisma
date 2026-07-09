@@ -2,7 +2,7 @@
 // Covers: Auth/Onboarding (User) + Learn (Course, Enrollment)
 // + Earn (Job, Application, Review) + Flourish (Product, Order, OrderItem)
 // Payment integration (Razorpay/UPI) will be layered on top of Order in Phase 2.
-// Note: Using String instead of enum because SQLite doesn't support enums.
+// Note: Using String instead of enum keeps the public API simple and portable.
 // Allowed Role values: LEARNER, EMPLOYER, SELLER, ADMIN
 // Allowed CourseLevel values: BEGINNER, INTERMEDIATE, ADVANCED
 // Allowed JobType values: FULL_TIME, PART_TIME, CONTRACT, GIG
@@ -15,8 +15,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model User {

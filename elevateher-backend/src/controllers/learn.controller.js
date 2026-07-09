@@ -2,6 +2,11 @@ const crypto = require("crypto");
 const prisma = require("../config/prisma");
 const razorpay = require("../config/razorpay");
 const { generateCertificate } = require("../services/certificate");
+const {
+  buildCourseCandidate,
+  orderByMlIds,
+  recommendCourses,
+} = require("../services/ml.service");
 
 // ---------- COURSES ----------
 
@@ -14,7 +19,7 @@ async function listCourses(req, res) {
   try {
     const { category, language } = req.query;
 
-    const courses = await prisma.course.findMany({
+    let courses = await prisma.course.findMany({
       where: {
         isPublished: true,
         reviewStatus: "APPROVED",
@@ -23,6 +28,22 @@ async function listCourses(req, res) {
       },
       orderBy: { createdAt: "desc" },
     });
+
+    const profileText = [category, language].filter(Boolean).join(" ");
+    if (profileText && courses.length > 0) {
+      const mlResult = await recommendCourses({
+        userId: "anonymous",
+        userProfileText: profileText,
+        candidates: courses.map(buildCourseCandidate),
+        limit: courses.length,
+      });
+      courses = orderByMlIds(
+        courses,
+        Array.isArray(mlResult.recommendations)
+          ? mlResult.recommendations.map((item) => item.id)
+          : []
+      );
+    }
 
     return res.status(200).json({ success: true, data: { courses } });
   } catch (err) {
