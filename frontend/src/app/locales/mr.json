@@ -1,0 +1,96 @@
+{
+  "brand": { "name": "सखी", "tagline": "शिका. कमवा. फुला." },
+  "nav": {
+    "home": "मुख्यपृष्ठ", "about": "आमच्याबद्दल", "help": "मदत",
+    "login": "साइन इन", "signup": "सुरू करा",
+    "dashboard": "डॅशबोर्ड", "learn": "शिका", "earn": "कमवा", "flourish": "फुला",
+    "profile": "प्रोफाइल", "notifications": "सूचना", "settings": "सेटिंग्ज",
+    "logout": "साइन आउट", "cart": "कार्ट"
+  },
+  "landing": {
+    "eyebrow": "महिलांसाठी AI-चालित आजीविका मंच",
+    "title": "कौशल्य शिका. उपजीविका कमवा. आपल्या अटींवर बहरा.",
+    "subtitle": "सखी AI-आधारित शिक्षण, प्रमाणित नोकऱ्या आणि मार्केटप्लेस एकत्र आणते.",
+    "cta_primary": "मोफत सुरू करा", "cta_secondary": "हे कसे कार्य करते ते पहा",
+    "stat_women": "सशक्त महिला", "stat_courses": "कौशल्य अभ्यासक्रम",
+    "stat_jobs": "प्रमाणित नोकऱ्या", "stat_earnings": "एकूण कमाई",
+    "features_title": "एक मंच, तीन प्रवास.",
+    "features_subtitle": "AI द्वारे निवडलेले, समुदायाने घडवलेले.",
+    "learn_title": "शिका", "learn_desc": "आपल्या भाषेत AI मेंटरसह लहान धडे.",
+    "earn_title": "कमवा", "earn_desc": "आपल्या कौशल्यांशी जुळणाऱ्या नोकऱ्या.",
+    "flourish_title": "फुला", "flourish_desc": "आपली कला विका, व्यवसाय वाढवा.",
+    "stories_title": "खऱ्या महिला, खऱ्या गोष्टी.",
+    "faq_title": "वारंवार विचारले जाणारे प्रश्न",
+    "footer_rights": "सर्व हक्क राखीव."
+  },
+  "auth": {
+    "welcome_back": "पुन्हा स्वागत आहे", "welcome_sub": "प्रवास सुरू ठेवण्यासाठी साइन इन करा",
+    "create_account": "आपले सखी खाते तयार करा", "create_sub": "एका मिनिटापेक्षा कमी वेळात.",
+    "email": "ईमेल", "password": "पासवर्ड", "confirm_password": "पासवर्ड ची पुष्टी करा",
+    "full_name": "पूर्ण नाव", "phone": "मोबाइल नंबर",
+    "remember": "लक्षात ठेवा", "forgot": "पासवर्ड विसरलात?",
+    "sign_in": "साइन इन", "sign_up": "खाते तयार करा", "or_continue": "किंवा सुरू ठेवा",
+    "no_account": "सखी वर नवीन आहात?", "have_account": "आधीच खाते आहे?",
+    "reset_title": "पासवर्ड रीसेट करा", "reset_sub": "आम्ही सुरक्षित लिंक पाठवू.",
+    "send_link": "लिंक पाठवा",
+    "otp_title": "आपला नंबर सत्यापित करा", "otp_sub": "6 अंकी कोड टाका.",
+    "verify": "सत्यापित करा", "resend": "पुन्हा पाठवा",
+    "onboarding_title": "स्वतःबद्दल सांगा", "onboarding_sub": "आपला प्रवास वैयक्तिक करण्यासाठी.",
+    "select_language": "आपली भाषा निवडा", "select_role": "आपण का आलात?",
+    "role_learner": "मला नवीन कौशल्य शिकायचे आहे",
+    "role_earner": "मी कामाच्या शोधात आहे",
+    "role_seller": "मला उत्पादने विकायची आहेत",
+    "continue": "सुरू ठेवा", "skip": "आत्ता वगळा"
+  },
+  "dashboard": {
+    "greeting_morning": "शुभ सकाळ", "greeting_afternoon": "नमस्कार", "greeting_evening": "शुभ संध्याकाळ",
+    "subtitle": "आज काय चालले आहे ते पहा.",
+    "streak": "दिवसांची मालिका", "xp": "XP मिळवले", "certificates": "प्रमाणपत्रे", "earnings": "या महिन्यात",
+    "continue_learning": "शिकणे सुरू ठेवा",
+    "recommended_courses": "आपल्यासाठी शिफारस", "recommended_jobs": "आपल्याला आवडतील",
+    "marketplace_highlights": "मार्केटप्लेस ठळक", "activity": "अलीकडील क्रियाकलाप",
+    "quick_actions": "त्वरित क्रिया", "progress_title": "या आठवड्यातील प्रगती"
+  },
+  "learn": {
+    "title": "शिका", "subtitle": "आपल्या गतीने वाढण्यासाठी अभ्यासक्रम.",
+    "search": "अभ्यासक्रम, कौशल्ये, मेंटर शोधा…", "categories": "श्रेणी", "all": "सर्व",
+    "lessons": "धडे", "hours": "तास",
+    "enroll": "नोंदणी करा", "continue": "सुरू ठेवा", "certificate": "प्रमाणपत्र मिळवा",
+    "about_course": "अभ्यासक्रमाबद्दल", "syllabus": "अभ्यासक्रम रूपरेषा",
+    "mentor": "आपल्या मेंटर", "discussion": "चर्चा", "reviews": "पुनरावलोकने",
+    "empty": "कोणतेही अभ्यासक्रम आढळले नाहीत."
+  },
+  "earn": {
+    "title": "कमवा", "subtitle": "आपल्यासाठी प्रमाणित नोकऱ्या.",
+    "search": "नोकऱ्या, कंपन्या, कौशल्ये…",
+    "location": "स्थान", "remote": "रिमोट", "type": "नोकरीचा प्रकार", "salary": "वेतन",
+    "apply": "अर्ज करा", "save": "जतन करा", "saved": "जतन केले",
+    "about_role": "भूमिकेबद्दल", "requirements": "आवश्यकता",
+    "responsibilities": "जबाबदाऱ्या", "company": "कंपनीबद्दल",
+    "empty": "कोणत्याही नोकऱ्या आढळल्या नाहीत."
+  },
+  "flourish": {
+    "title": "फ्लॉरिश मार्केटप्लेस", "subtitle": "हस्तकला शोधा, व्यवसाय वाढवा.",
+    "search": "उत्पादने, विक्रेते शोधा…", "categories": "श्रेणीनुसार खरेदी करा", "featured": "आज वैशिष्ट्यीकृत",
+    "upload": "उत्पादन अपलोड करा",
+    "add_to_cart": "कार्टमध्ये जोडा", "buy_now": "आत्ता खरेदी करा",
+    "cart_title": "आपला कार्ट", "cart_empty": "आपला कार्ट रिकामा आहे",
+    "cart_empty_sub": "महिला उद्योजकांची सुंदर उत्पादने शोधा.",
+    "checkout": "चेकआउट", "subtotal": "उप-एकूण", "shipping": "शिपिंग", "total": "एकूण",
+    "seller": "विक्रेत्याबद्दल"
+  },
+  "common": {
+    "loading": "लोड होत आहे…", "retry": "पुन्हा प्रयत्न करा",
+    "cancel": "रद्द करा", "save": "जतन करा",
+    "search": "शोधा", "filter": "फिल्टर", "clear": "साफ करा",
+    "back": "मागे", "next": "पुढे", "previous": "मागील", "view_all": "सर्व पहा",
+    "empty_title": "येथे अद्याप काहीही नाही", "empty_sub": "लवकरच परत तपासा.",
+    "error_title": "काहीतरी चूक झाली", "error_sub": "आत्ता लोड करू शकत नाही."
+  },
+  "settings": {
+    "title": "सेटिंग्ज", "appearance": "देखावा", "theme": "थीम",
+    "language": "भाषा", "account": "खाते", "notifications": "सूचना",
+    "privacy": "गोपनीयता", "accessibility": "प्रवेशयोग्यता",
+    "light": "लाइट", "dark": "डार्क", "system": "सिस्टम"
+  }
+}
