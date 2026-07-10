@@ -7,8 +7,8 @@ interface AuthState {
   user: User | null;
   status: "idle" | "loading" | "authenticated" | "unauthenticated";
   restore: () => Promise<void>;
-  login: (email: string, password: string) => Promise<User>;
-  signup: (name: string, email: string, password: string, phone?: string) => Promise<User>;
+  login: (phone: string, password: string) => Promise<User>;
+  signup: (name: string, email: string, password: string, phone: string) => Promise<User>;
   setUser: (user: User) => void;
   logout: () => Promise<void>;
 }
@@ -31,8 +31,8 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ user: null, status: "unauthenticated" });
     }
   },
-  login: async (email, password) => {
-    const res = await authApi.login({ email, password });
+  login: async (phone, password) => {
+    const res = await authApi.login({ phone, password });
     tokenStore.set(res.token, res.refresh_token);
     set({ user: res.user, status: "authenticated" });
     return res.user;

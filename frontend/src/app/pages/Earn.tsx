@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   Search, MapPin, Briefcase, Clock, Bookmark, BookmarkCheck,
-  Building2, ArrowLeft, ArrowUpRight, Check,
+  Building2, ArrowLeft, ArrowUpRight, Check, Sparkles,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -17,29 +17,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { jobsApi } from "@/app/services/api/endpoints";
+import { unwrapError } from "@/app/services/api/client";
+import { useAuthStore } from "@/app/store/auth";
 import { PageMotion } from "../components/PageMotion";
 import { ListSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
 import type { Job } from "@/app/types";
 
-const placeholderJobs: Job[] = Array.from({ length: 8 }).map((_, i) => ({
-  id: `${i + 1}`,
-  title: ["Junior UX Designer", "Content Writer", "Customer Support Executive", "Junior Data Analyst", "Social Media Manager", "Sales Associate", "Digital Marketing Intern", "Fashion Illustrator"][i],
-  company: { name: ["TATA Digital", "Zomato", "Meesho", "Swiggy", "Nykaa", "Reliance", "Boat", "Fabindia"][i], verified: true },
-  location: ["Mumbai", "Bengaluru", "Remote", "Hyderabad", "Delhi", "Pune", "Remote", "Jaipur"][i],
-  remote: [true, true, true, false, false, false, true, false][i],
-  type: (["full-time", "full-time", "part-time", "full-time", "full-time", "full-time", "internship", "contract"] as Job["type"][])[i],
-  salary_min: [30000, 25000, 20000, 40000, 35000, 22000, 15000, 28000][i],
-  salary_max: [55000, 45000, 35000, 70000, 60000, 40000, 20000, 45000][i],
-  currency: "INR",
-  posted_at: new Date(Date.now() - i * 86400000).toISOString(),
-  skills: ["Figma", "UX", "Prototyping", "User Research"],
-  saved: false,
-}));
-
 export function EarnPage() {
   const { t } = useTranslation();
+  const authed = useAuthStore((s) => s.status === "authenticated");
   const [q, setQ] = useState("");
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [type, setType] = useState<string | null>(null);
@@ -48,10 +36,13 @@ export function EarnPage() {
     queryKey: ["jobs", q, remoteOnly, type],
     queryFn: () => jobsApi.list({ q, remote: remoteOnly || undefined, type: type ?? undefined }),
   });
+  const savedQuery = useQuery({ queryKey: ["saved-jobs"], queryFn: jobsApi.saved, enabled: authed });
+  const savedIds = new Set((savedQuery.data ?? []).map((j) => j.id));
 
-  const jobs = query.data?.items ?? placeholderJobs;
+  // Text relevance is ranked server-side by the ML search service (query `q` is sent
+  // to the backend); the client only applies the exact-match facets.
+  const jobs = query.data?.items ?? [];
   const filtered = jobs.filter((j) => {
-    if (q && !j.title.toLowerCase().includes(q.toLowerCase()) && !j.company.name.toLowerCase().includes(q.toLowerCase())) return false;
     if (remoteOnly && !j.remote) return false;
     if (type && j.type !== type) return false;
     return true;
@@ -59,9 +50,14 @@ export function EarnPage() {
 
   return (
     <PageMotion className="space-y-8">
-      <div>
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">{t("earn.title")}</h1>
-        <p className="mt-1 text-muted-foreground">{t("earn.subtitle")}</p>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
+        <div>
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">{t("earn.title")}</h1>
+          <p className="mt-1 text-muted-foreground">{t("earn.subtitle")}</p>
+        </div>
+        <Button asChild variant="outline" className="rounded-full shrink-0">
+          <Link to="/app/earn/mine">My Jobs</Link>
+        </Button>
       </div>
 
       <Card className="rounded-3xl border-border bg-card p-5">
@@ -96,7 +92,7 @@ export function EarnPage() {
         <div className="grid gap-4 md:grid-cols-2">
           {filtered.map((j, i) => (
             <motion.div key={j.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: (i % 6) * 0.04 }}>
-              <JobCard job={j} />
+              <JobCard job={j} isSaved={savedIds.has(j.id)} />
             </motion.div>
           ))}
         </div>
@@ -105,9 +101,19 @@ export function EarnPage() {
   );
 }
 
-function JobCard({ job }: { job: Job }) {
+function JobCard({ job, isSaved = false }: { job: Job; isSaved?: boolean }) {
   const { t } = useTranslation();
-  const [saved, setSaved] = useState(job.saved ?? false);
+  const qc = useQueryClient();
+  const [saved, setSaved] = useState(isSaved);
+  useEffect(() => setSaved(isSaved), [isSaved]);
+
+  const toggleSave = useMutation({
+    mutationFn: () => (saved ? jobsApi.unsave(job.id) : jobsApi.save(job.id)),
+    onMutate: () => setSaved((s) => !s),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["saved-jobs"] }),
+    onError: (e) => { setSaved((s) => !s); toast.error(unwrapError(e).message); },
+  });
+
   return (
     <Card className="group rounded-3xl border-border bg-card p-5 hover-lift h-full">
       <div className="flex items-start gap-3">
@@ -124,7 +130,7 @@ function JobCard({ job }: { job: Job }) {
             </div>
             <button
               aria-label="Save"
-              onClick={() => setSaved(!saved)}
+              onClick={() => toggleSave.mutate()}
               className="rounded-full p-2 hover:bg-muted transition-colors"
             >
               {saved ? <BookmarkCheck className="h-4 w-4 text-primary" /> : <Bookmark className="h-4 w-4 text-muted-foreground" />}
@@ -153,15 +159,45 @@ function JobCard({ job }: { job: Job }) {
 export function JobDetailPage() {
   const { id } = useParams();
   const { t } = useTranslation();
+  const qc = useQueryClient();
+  const authed = useAuthStore((s) => s.status === "authenticated");
   const [applied, setApplied] = useState(false);
+  const [saved, setSaved] = useState(false);
   const query = useQuery({ queryKey: ["job", id], queryFn: () => jobsApi.get(id!), enabled: !!id });
-  const job = query.data ?? placeholderJobs.find((j) => j.id === id) ?? placeholderJobs[0];
+  const matchQuery = useQuery({ queryKey: ["job-match", id], queryFn: () => jobsApi.match(id!), enabled: !!id && authed });
+  const savedQuery = useQuery({ queryKey: ["saved-jobs"], queryFn: jobsApi.saved, enabled: authed });
+
+  useEffect(() => {
+    if (savedQuery.data && id) setSaved(savedQuery.data.some((j) => j.id === id));
+  }, [savedQuery.data, id]);
 
   const mutation = useMutation({
-    mutationFn: (note: string) => jobsApi.apply(job.id, { note }),
+    mutationFn: (note: string) => jobsApi.apply(id!, { note }),
     onSuccess: () => { setApplied(true); toast.success("Application submitted 🎉"); },
-    onError: () => { setApplied(true); toast.success("Application submitted (offline demo)"); },
+    onError: (e) => toast.error(unwrapError(e).message),
   });
+  const saveMutation = useMutation({
+    mutationFn: () => (saved ? jobsApi.unsave(id!) : jobsApi.save(id!)),
+    onMutate: () => setSaved((s) => !s),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["saved-jobs"] }),
+    onError: (e) => { setSaved((s) => !s); toast.error(unwrapError(e).message); },
+  });
+
+  if (query.isLoading) {
+    return (
+      <PageMotion className="space-y-6">
+        <ListSkeleton count={4} />
+      </PageMotion>
+    );
+  }
+  if (query.isError || !query.data) {
+    return (
+      <PageMotion className="space-y-6">
+        <ErrorState onRetry={() => query.refetch()} />
+      </PageMotion>
+    );
+  }
+  const job = query.data;
 
   return (
     <PageMotion className="space-y-8">
@@ -187,8 +223,8 @@ export function JobDetailPage() {
 
           <Card className="rounded-3xl border-border bg-card p-6">
             <h3 className="font-semibold">{t("earn.about_role")}</h3>
-            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-              We're looking for someone excited about crafting delightful digital experiences. You'll work closely with product and engineering to ship interfaces that millions will use, in a warm, mentor-led environment.
+            <p className="mt-3 text-sm leading-relaxed text-muted-foreground whitespace-pre-line">
+              {job.description || "No description provided for this role."}
             </p>
           </Card>
 
@@ -219,6 +255,27 @@ export function JobDetailPage() {
                 <div className="text-2xl font-bold">₹{job.salary_min.toLocaleString()} — ₹{job.salary_max?.toLocaleString()}</div>
               </>
             )}
+            {matchQuery.data && (
+              <div className="mt-4 rounded-2xl border border-border p-4">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Sparkles className="h-4 w-4 text-primary" /> Your match
+                </div>
+                {matchQuery.data.hasSkills ? (
+                  <>
+                    <div className="mt-1 text-2xl font-bold text-primary">{matchQuery.data.matchPercent}%</div>
+                    {matchQuery.data.matchedSkills.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {matchQuery.data.matchedSkills.slice(0, 6).map((s) => (
+                          <Badge key={s} variant="secondary" className="rounded-full text-xs">{s}</Badge>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">Add skills to your resume to see your match score.</p>
+                )}
+              </div>
+            )}
             {applied ? (
               <div className="mt-6 rounded-2xl bg-accent/10 text-accent p-4 text-sm flex items-center gap-2">
                 <Check className="h-4 w-4" /> Applied — we'll notify the employer.
@@ -239,7 +296,10 @@ export function JobDetailPage() {
                 </Button>
               </form>
             )}
-            <Button variant="outline" className="mt-2 w-full rounded-full"><Bookmark className="h-4 w-4 mr-1" />{t("earn.save")}</Button>
+            <Button variant="outline" onClick={() => saveMutation.mutate()} disabled={!authed} className="mt-2 w-full rounded-full">
+              {saved ? <BookmarkCheck className="h-4 w-4 mr-1 text-primary" /> : <Bookmark className="h-4 w-4 mr-1" />}
+              {saved ? "Saved" : t("earn.save")}
+            </Button>
           </Card>
         </aside>
       </div>

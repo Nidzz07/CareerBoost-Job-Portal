@@ -1,8 +1,23 @@
 # Run with: docker-compose up --build
-# Spins up backend + Postgres + ML together for production-style testing.
+# Spins up frontend + backend + Postgres + ML together for production-style testing.
 # For everyday dev against a local PostgreSQL database, use `npm run dev`.
 
 services:
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Browser calls the backend published on the host.
+        VITE_API_BASE_URL: http://localhost:5000/api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    depends_on:
+      backend:
+        condition: service_healthy
+
   backend:
     build: .
     ports:
@@ -15,11 +30,23 @@ services:
       - DATABASE_URL=postgresql://elevateher:elevateher@postgres:5432/elevateher
       - ML_SERVICE_URL=http://ml:8000
       - ML_TIMEOUT_MS=1500
+      # Optional CORS allowlist (empty = allow all origins, unchanged default).
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
+      # Optional — payment features only; the backend boots without these.
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
       ml:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      # node:alpine ships busybox wget; hit the un-rate-limited health route.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
     volumes:
       - uploads_data:/app/uploads
 
@@ -28,6 +55,16 @@ services:
       context: ../elevateher-ml/elevateher-ml
     ports:
       - "8000:8000"
+    environment:
+      # Optional CORS allowlist for the ML service (empty = allow all, unchanged default).
+      - ALLOWED_ORIGINS=${ML_ALLOWED_ORIGINS:-}
+    healthcheck:
+      # python:3.12-slim has no curl; use the bundled Python to hit the health route.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   postgres:
     image: postgres:16-alpine

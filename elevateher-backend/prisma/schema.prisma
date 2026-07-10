@@ -27,8 +27,11 @@ model User {
   passwordHash String
   language     String   @default("en")
   location     String?
+  avatarUrl    String?
   role         String   @default("LEARNER") // LEARNER | EMPLOYER | SELLER | ADMIN
   verified     Boolean  @default(false)
+  onboarded    Boolean  @default(false)
+  settingsJson String? // JSON-stringified account settings (notifications/privacy/accessibility)
 
   employerVerified Boolean @default(false)
 
@@ -51,6 +54,9 @@ model User {
   courseReviews  CourseReview[]
   productReviews ProductReview[]
   cart           Cart?
+  notifications  Notification[]
+  refreshTokens  RefreshToken[]
+  savedJobs      SavedJob[]
 
   @@map("users")
 }
@@ -79,8 +85,27 @@ model Course {
   enrollments Enrollment[]
   quizzes     Quiz[]
   reviews     CourseReview[]
+  lessons     Lesson[]
 
   @@map("courses")
+}
+
+// Ordered lesson within a course (Phase 2). Minimal content model: title + text
+// content + optional video/media URL. Lessons drive the course player and progress.
+model Lesson {
+  id        String   @id @default(uuid())
+  courseId  String
+  title     String
+  content   String? // lesson body text
+  videoUrl  String? // optional media (uploaded via /api/upload)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id])
+
+  @@index([courseId])
+  @@map("lessons")
 }
 
 model Enrollment {
@@ -91,6 +116,12 @@ model Enrollment {
   completedAt    DateTime?
   certificateUrl String?
   enrolledAt     DateTime  @default(now())
+
+  // Lesson-level progress + last-activity (Phase 2). completedLessonsJson is a
+  // JSON-stringified array of completed lesson IDs; lastActivityAt powers "resume
+  // learning" and dropout prediction.
+  completedLessonsJson String?
+  lastActivityAt       DateTime?
 
   // Payment tracking for paid courses. Free courses (price 0) are FREE immediately.
   paymentStatus     String  @default("FREE") // FREE | PENDING | PAID | FAILED
@@ -123,8 +154,24 @@ model Job {
 
   applications Application[]
   reviews      Review[]
+  savedBy      SavedJob[]
 
   @@map("jobs")
+}
+
+// A learner's saved/bookmarked job (Phase 3).
+model SavedJob {
+  id        String   @id @default(uuid())
+  userId    String
+  jobId     String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  job  Job  @relation(fields: [jobId], references: [id])
+
+  @@unique([userId, jobId])
+  @@index([userId])
+  @@map("saved_jobs")
 }
 
 model Application {
@@ -347,4 +394,53 @@ model CartItem {
 
   @@unique([cartId, productId])
   @@map("cart_items")
+}
+
+// Persisted in-app notification. Foundation only (Phase 0): created via the shared
+// notification service and read through /api/notifications. Modules do not emit
+// notifications yet.
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   @default("system") // course | job | order | system | message
+  title     String
+  body      String?
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+// Opaque, DB-backed refresh token (Phase 1). Issued at login/signup; exchanged for a
+// fresh access token at POST /api/auth/refresh; revoked on logout / password reset.
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// One-time codes for phone verification (OTP) and password reset (Phase 1).
+// Delivered via the (simulated) SMS channel in notification.service.
+model VerificationCode {
+  id         String    @id @default(uuid())
+  phone      String
+  code       String
+  purpose    String // OTP | PASSWORD_RESET
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([phone, purpose])
+  @@map("verification_codes")
 }

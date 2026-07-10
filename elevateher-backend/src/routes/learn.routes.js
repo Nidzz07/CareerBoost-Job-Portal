@@ -20,16 +20,34 @@ const {
   getMyQuizAttempts,
   addCourseReview,
   getCourseReviews,
+  listLessons,
+  createLesson,
+  updateLesson,
+  deleteLesson,
+  getRecommendedCourses,
+  getCourseAtRisk,
 } = require("../controllers/learn.controller");
 const { requireAuth, requireRole } = require("../middleware/auth.middleware");
 
 const router = express.Router();
+
+// Authenticated - Personalized ML recommendations (declared before /courses/:id)
+router.get("/recommendations", requireAuth, getRecommendedCourses);
 
 // Public - Courses
 router.get("/courses", listCourses);
 router.get("/courses/pending", requireAuth, requireRole("ADMIN"), getPendingCourses);
 router.get("/courses/:id", getCourse);
 router.get("/courses/:id/reviews", getCourseReviews);
+
+// Authenticated - Lessons (course content + player)
+router.get("/courses/:id/lessons", requireAuth, listLessons);
+router.post("/courses/:courseId/lessons", requireAuth, createLesson);
+router.patch("/lessons/:id", requireAuth, updateLesson);
+router.delete("/lessons/:id", requireAuth, deleteLesson);
+
+// Authenticated - Creator dropout insight (course owner/admin)
+router.get("/courses/:id/at-risk", requireAuth, getCourseAtRisk);
 
 // Authenticated - Any logged-in user can submit a course (creator marketplace)
 router.post("/courses", requireAuth, createCourse);

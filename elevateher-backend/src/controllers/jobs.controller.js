@@ -1,10 +1,23 @@
 const prisma = require("../config/prisma");
 const {
   buildJobCandidate,
+  buildUserProfileText,
   matchJobScore,
   orderByMlIds,
   recommendJobs,
+  search,
 } = require("../services/ml.service");
+
+/** Parse a resume's JSON skills column into a string array. */
+function resumeSkills(resume) {
+  if (!resume || !resume.skillsJson) return [];
+  try {
+    const parsed = JSON.parse(resume.skillsJson);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * GET /api/jobs
@@ -13,7 +26,7 @@ const {
  */
 async function listJobs(req, res) {
   try {
-    const { category, location, jobType } = req.query;
+    const { q, category, location, jobType } = req.query;
 
     let jobs = await prisma.job.findMany({
       where: {
@@ -62,6 +75,20 @@ async function listJobs(req, res) {
           .sort((a, b) => b.score - a.score || a.index - b.index)
           .map(({ job }) => job);
       }
+    }
+
+    // Free-text search: rank the (already filtered) jobs by relevance to the query
+    // using the existing ML search service.
+    if (q && jobs.length > 0) {
+      const mlSearch = await search({
+        query: q,
+        candidates: jobs.map(buildJobCandidate),
+        limit: jobs.length,
+      });
+      jobs = orderByMlIds(
+        jobs,
+        Array.isArray(mlSearch.results) ? mlSearch.results.map((item) => item.id) : []
+      );
     }
 
     return res.status(200).json({ success: true, data: { jobs } });
@@ -587,13 +614,219 @@ async function getEmployerInterviews(req, res) {
   }
 }
 
+/**
+ * DELETE /api/jobs/:id
+ * Requires auth (owner employer/admin). Blocked if the job already has applicants —
+ * deactivate it instead (PATCH isActive:false).
+ */
+async function deleteJob(req, res) {
+  try {
+    const { id } = req.params;
+    const job = await prisma.job.findUnique({
+      where: { id },
+      include: { _count: { select: { applications: true } } },
+    });
+    if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+    if (job.employerId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "You do not own this job posting" });
+    }
+    if (job._count.applications > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Cannot delete a job with applicants. Deactivate it instead.",
+      });
+    }
+
+    await prisma.savedJob.deleteMany({ where: { jobId: id } });
+    await prisma.review.deleteMany({ where: { jobId: id } });
+    await prisma.job.delete({ where: { id } });
+
+    return res.status(200).json({ success: true, message: "Job deleted" });
+  } catch (err) {
+    console.error("Delete job error:", err);
+    return res.status(500).json({ success: false, message: "Could not delete job" });
+  }
+}
+
+// ---------- SAVED JOBS ----------
+
+/** POST /api/jobs/:id/save — bookmark a job. */
+async function saveJob(req, res) {
+  try {
+    const { id: jobId } = req.params;
+    const job = await prisma.job.findUnique({ where: { id: jobId } });
+    if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+
+    await prisma.savedJob.upsert({
+      where: { userId_jobId: { userId: req.user.id, jobId } },
+      update: {},
+      create: { userId: req.user.id, jobId },
+    });
+    return res.status(200).json({ success: true, message: "Job saved" });
+  } catch (err) {
+    console.error("Save job error:", err);
+    return res.status(500).json({ success: false, message: "Could not save job" });
+  }
+}
+
+/** DELETE /api/jobs/:id/save — remove a bookmark. */
+async function unsaveJob(req, res) {
+  try {
+    const { id: jobId } = req.params;
+    await prisma.savedJob.deleteMany({ where: { userId: req.user.id, jobId } });
+    return res.status(200).json({ success: true, message: "Job removed from saved" });
+  } catch (err) {
+    console.error("Unsave job error:", err);
+    return res.status(500).json({ success: false, message: "Could not update saved jobs" });
+  }
+}
+
+/** GET /api/jobs/my/saved — the caller's saved jobs. */
+async function getSavedJobs(req, res) {
+  try {
+    const saved = await prisma.savedJob.findMany({
+      where: { userId: req.user.id },
+      include: { job: { include: { employer: { select: { id: true, name: true, employerVerified: true } } } } },
+      orderBy: { createdAt: "desc" },
+    });
+    return res.status(200).json({ success: true, data: { jobs: saved.map((s) => s.job) } });
+  } catch (err) {
+    console.error("Get saved jobs error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch saved jobs" });
+  }
+}
+
+/**
+ * DELETE /api/jobs/applications/:id
+ * Requires auth (application owner). Withdraws an application (and any interview).
+ * Blocked once the candidate has been hired.
+ */
+async function withdrawApplication(req, res) {
+  try {
+    const { id } = req.params;
+    const application = await prisma.application.findUnique({ where: { id }, include: { interview: true } });
+    if (!application) return res.status(404).json({ success: false, message: "Application not found" });
+    if (application.userId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "This is not your application" });
+    }
+    if (application.status === "HIRED") {
+      return res.status(409).json({ success: false, message: "You can't withdraw after being hired" });
+    }
+
+    if (application.interview) {
+      await prisma.interview.delete({ where: { id: application.interview.id } });
+    }
+    await prisma.application.delete({ where: { id } });
+
+    return res.status(200).json({ success: true, message: "Application withdrawn" });
+  } catch (err) {
+    console.error("Withdraw application error:", err);
+    return res.status(500).json({ success: false, message: "Could not withdraw application" });
+  }
+}
+
+// ---------- ML: MATCH SCORE & RECOMMENDATIONS ----------
+
+/**
+ * GET /api/jobs/:id/match
+ * Requires auth. Match score (%) between the caller's resume skills and this job,
+ * via the existing ML skill-to-job matching, plus which of their skills the job mentions.
+ */
+async function getJobMatch(req, res) {
+  try {
+    const { id } = req.params;
+    const job = await prisma.job.findUnique({ where: { id } });
+    if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+
+    const resume = await prisma.resume.findUnique({ where: { userId: req.user.id } });
+    const skills = resumeSkills(resume);
+
+    if (skills.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: { matchScore: 0, matchPercent: 0, matchedSkills: [], hasSkills: false },
+      });
+    }
+
+    const result = await matchJobScore({
+      userSkills: skills,
+      jobTitle: job.title,
+      jobDescription: job.description,
+    });
+    const matchScore = Number.isFinite(result.matchScore) ? result.matchScore : 0;
+
+    const jobText = `${job.title} ${job.description}`.toLowerCase();
+    const matchedSkills = skills.filter((s) => jobText.includes(String(s).toLowerCase()));
+
+    return res.status(200).json({
+      success: true,
+      data: { matchScore, matchPercent: Math.round(matchScore * 100), matchedSkills, hasSkills: true },
+    });
+  } catch (err) {
+    console.error("Get job match error:", err);
+    return res.status(500).json({ success: false, message: "Could not compute match score" });
+  }
+}
+
+/**
+ * GET /api/jobs/recommendations
+ * Requires auth. Personalized job recommendations from the caller's profile/resume/
+ * completed courses, ranked by the existing ML recommend endpoint. Excludes jobs the
+ * user has already applied to.
+ */
+async function getRecommendedJobs(req, res) {
+  try {
+    const [user, resume, enrollments, applications, jobs] = await Promise.all([
+      prisma.user.findUnique({ where: { id: req.user.id } }),
+      prisma.resume.findUnique({ where: { userId: req.user.id } }),
+      prisma.enrollment.findMany({ where: { userId: req.user.id }, include: { course: true } }),
+      prisma.application.findMany({ where: { userId: req.user.id }, select: { jobId: true } }),
+      prisma.job.findMany({
+        where: { isActive: true },
+        include: { employer: { select: { id: true, name: true, employerVerified: true } } },
+      }),
+    ]);
+
+    const appliedIds = new Set(applications.map((a) => a.jobId));
+    const candidates = jobs.filter((j) => !appliedIds.has(j.id));
+
+    let recommended = candidates;
+    const profileText = buildUserProfileText({ user, resume, enrollments });
+
+    if (profileText && candidates.length > 0) {
+      const mlResult = await recommendJobs({
+        userId: req.user.id,
+        userProfileText: profileText,
+        candidates: candidates.map(buildJobCandidate),
+        limit: candidates.length,
+      });
+      recommended = orderByMlIds(
+        candidates,
+        Array.isArray(mlResult.recommendations) ? mlResult.recommendations.map((item) => item.id) : []
+      );
+    }
+
+    return res.status(200).json({ success: true, data: { jobs: recommended.slice(0, 10) } });
+  } catch (err) {
+    console.error("Get recommended jobs error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch recommendations" });
+  }
+}
+
 module.exports = {
   listJobs,
   getJob,
   createJob,
   updateJob,
+  deleteJob,
   getMyPostings,
   applyToJob,
+  withdrawApplication,
+  saveJob,
+  unsaveJob,
+  getSavedJobs,
+  getJobMatch,
+  getRecommendedJobs,
   getMyApplications,
   getJobApplications,
   updateApplicationStatus,

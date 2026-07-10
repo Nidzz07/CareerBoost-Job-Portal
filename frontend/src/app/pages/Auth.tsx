@@ -18,8 +18,9 @@ import { useAuthStore } from "@/app/store/auth";
 import { authApi, userApi } from "@/app/services/api/endpoints";
 import { unwrapError } from "@/app/services/api/client";
 
+// Backend authenticates by phone (see auth.controller.js).
 const loginSchema = z.object({
-  email: z.string().email("Enter a valid email"),
+  phone: z.string().min(10, "Enter a valid phone number"),
   password: z.string().min(6, "At least 6 characters"),
 });
 
@@ -27,10 +28,8 @@ const signupSchema = z.object({
   name: z.string().min(2, "Enter your full name"),
   email: z.string().email("Enter a valid email"),
   password: z.string().min(8, "Use 8+ characters for security"),
-  phone: z.string().optional(),
+  phone: z.string().min(10, "Enter a valid phone number"),
 });
-
-const forgotSchema = z.object({ email: z.string().email() });
 
 export function LoginPage() {
   const { t } = useTranslation();
@@ -40,13 +39,13 @@ export function LoginPage() {
 
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: "", password: "" },
+    defaultValues: { phone: "", password: "" },
   });
 
   const onSubmit = form.handleSubmit(async (values) => {
     setLoading(true);
     try {
-      await login(values.email, values.password);
+      await login(values.phone, values.password);
       toast.success("Welcome back to Sakhi 🌸");
       navigate("/app/dashboard");
     } catch (e) {
@@ -63,11 +62,11 @@ export function LoginPage() {
 
       <form onSubmit={onSubmit} className="mt-8 space-y-5">
         <Field
-          label={t("auth.email")}
-          icon={<Mail className="h-4 w-4" />}
-          error={form.formState.errors.email?.message}
+          label={t("auth.phone")}
+          icon={<Phone className="h-4 w-4" />}
+          error={form.formState.errors.phone?.message}
         >
-          <Input type="email" autoComplete="email" {...form.register("email")} className="pl-10 h-11 rounded-xl" />
+          <Input type="tel" autoComplete="tel" {...form.register("phone")} className="pl-10 h-11 rounded-xl" />
         </Field>
         <Field
           label={t("auth.password")}
@@ -158,33 +157,49 @@ export function SignupPage() {
 export function ForgotPasswordPage() {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
-  const [done, setDone] = useState(false);
+  const [step, setStep] = useState<"request" | "reset" | "done">("request");
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
 
-  const form = useForm<z.infer<typeof forgotSchema>>({
-    resolver: zodResolver(forgotSchema),
-    defaultValues: { email: "" },
-  });
-
-  const onSubmit = form.handleSubmit(async (v) => {
+  const request = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (phone.trim().length < 10) { toast.error("Enter a valid phone number"); return; }
     setLoading(true);
     try {
-      await authApi.forgotPassword(v.email);
-      setDone(true);
+      const res = await authApi.forgotPassword(phone.trim());
+      toast.success(res.message ?? "If an account exists, a reset code has been sent.");
+      setStep("reset");
     } catch (e) {
       toast.error(unwrapError(e).message);
     } finally {
       setLoading(false);
     }
-  });
+  };
 
-  if (done) {
+  const reset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (code.length !== 6) { toast.error("Enter the 6-digit code"); return; }
+    if (newPassword.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    setLoading(true);
+    try {
+      await authApi.resetPassword({ phone: phone.trim(), code, newPassword });
+      setStep("done");
+    } catch (e) {
+      toast.error(unwrapError(e).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (step === "done") {
     return (
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center py-4">
         <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-accent/20 text-accent">
           <Check className="h-6 w-6" />
         </div>
-        <h1 className="mt-6 text-xl font-bold">Check your inbox</h1>
-        <p className="mt-2 text-sm text-muted-foreground">We've sent a reset link. It'll expire in 30 minutes.</p>
+        <h1 className="mt-6 text-xl font-bold">Password updated</h1>
+        <p className="mt-2 text-sm text-muted-foreground">You can now sign in with your new password.</p>
         <Button asChild variant="outline" className="mt-6 rounded-xl">
           <Link to="/login">Back to sign in</Link>
         </Button>
@@ -196,14 +211,33 @@ export function ForgotPasswordPage() {
     <div>
       <h1 className="text-2xl sm:text-3xl font-bold">{t("auth.reset_title")}</h1>
       <p className="mt-1.5 text-sm text-muted-foreground">{t("auth.reset_sub")}</p>
-      <form onSubmit={onSubmit} className="mt-8 space-y-5">
-        <Field label={t("auth.email")} icon={<Mail className="h-4 w-4" />} error={form.formState.errors.email?.message}>
-          <Input type="email" {...form.register("email")} className="pl-10 h-11 rounded-xl" />
-        </Field>
-        <Button type="submit" disabled={loading} className="w-full h-11 rounded-xl gradient-primary text-primary-foreground">
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : t("auth.send_link")}
-        </Button>
-      </form>
+
+      {step === "request" ? (
+        <form onSubmit={request} className="mt-8 space-y-5">
+          <Field label={t("auth.phone")} icon={<Phone className="h-4 w-4" />}>
+            <Input type="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} className="pl-10 h-11 rounded-xl" />
+          </Field>
+          <Button type="submit" disabled={loading} className="w-full h-11 rounded-xl gradient-primary text-primary-foreground">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : t("auth.send_link")}
+          </Button>
+        </form>
+      ) : (
+        <form onSubmit={reset} className="mt-8 space-y-5">
+          <Field label="Reset code" icon={<Check className="h-4 w-4" />}>
+            <Input inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} className="pl-10 h-11 rounded-xl tracking-[0.4em]" />
+          </Field>
+          <Field label="New password" icon={<Lock className="h-4 w-4" />}>
+            <Input type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="pl-10 h-11 rounded-xl" />
+          </Field>
+          <Button type="submit" disabled={loading} className="w-full h-11 rounded-xl gradient-primary text-primary-foreground">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Reset password"}
+          </Button>
+          <button type="button" onClick={() => setStep("request")} className="w-full text-sm text-muted-foreground hover:text-foreground">
+            Use a different number
+          </button>
+        </form>
+      )}
+
       <Link to="/login" className="mt-6 block text-center text-sm text-muted-foreground hover:text-foreground">
         {t("common.back")}
       </Link>
@@ -215,15 +249,19 @@ export function OtpPage() {
   const { t } = useTranslation();
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
   const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
+  const phone = user?.phone ?? "";
 
   const onSubmit = async () => {
     if (otp.length !== 6) return;
+    if (!phone) { toast.error("Sign in first to verify your phone."); return; }
     setLoading(true);
     try {
-      await authApi.verifyOtp("", otp);
-      toast.success("Verified!");
-      navigate("/onboarding");
+      await authApi.verifyOtp(phone, otp);
+      toast.success("Phone verified!");
+      navigate("/app/dashboard");
     } catch (e) {
       toast.error(unwrapError(e).message);
     } finally {
@@ -231,10 +269,25 @@ export function OtpPage() {
     }
   };
 
+  const resend = async () => {
+    if (!phone) { toast.error("Sign in first to verify your phone."); return; }
+    setResending(true);
+    try {
+      await authApi.sendOtp(phone);
+      toast.success("A new code has been sent.");
+    } catch (e) {
+      toast.error(unwrapError(e).message);
+    } finally {
+      setResending(false);
+    }
+  };
+
   return (
     <div className="text-center">
       <h1 className="text-2xl sm:text-3xl font-bold">{t("auth.otp_title")}</h1>
-      <p className="mt-1.5 text-sm text-muted-foreground">{t("auth.otp_sub")}</p>
+      <p className="mt-1.5 text-sm text-muted-foreground">
+        {phone ? `${t("auth.otp_sub")} (${phone})` : t("auth.otp_sub")}
+      </p>
       <div className="mt-8 flex justify-center">
         <InputOTP maxLength={6} value={otp} onChange={setOtp}>
           <InputOTPGroup>
@@ -247,7 +300,9 @@ export function OtpPage() {
       <Button onClick={onSubmit} disabled={otp.length !== 6 || loading} className="mt-8 w-full h-11 rounded-xl gradient-primary text-primary-foreground">
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : t("auth.verify")}
       </Button>
-      <button className="mt-4 text-sm text-primary hover:underline">{t("auth.resend")}</button>
+      <button onClick={resend} disabled={resending} className="mt-4 text-sm text-primary hover:underline disabled:opacity-50">
+        {resending ? "Sending…" : t("auth.resend")}
+      </button>
     </div>
   );
 }

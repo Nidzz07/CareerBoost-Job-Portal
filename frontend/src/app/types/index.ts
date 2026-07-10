@@ -36,6 +36,7 @@ export interface Course {
 export interface Job {
   id: string;
   title: string;
+  category?: string;
   company: { name: string; logo_url?: string; verified?: boolean };
   location: string;
   remote: boolean;
@@ -91,6 +92,7 @@ export interface Paginated<T> {
   per_page: number;
 }
 
-export interface LoginPayload { email: string; password: string; }
-export interface SignupPayload { name: string; email: string; password: string; phone?: string; }
+// Backend authenticates by phone + password (see auth.controller.js).
+export interface LoginPayload { phone: string; password: string; }
+export interface SignupPayload { name: string; phone: string; password: string; email?: string; }
 export interface AuthResponse { token: string; refresh_token?: string; user: User; }

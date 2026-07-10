@@ -1,16 +1,17 @@
-import { Outlet, NavLink, Link, useNavigate } from "react-router-dom";
+import { Outlet, NavLink, Link, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import {
   Home, GraduationCap, Briefcase, Store, User, Bell, Settings, LogOut,
-  Menu, X, ShoppingBag, Search,
+  Menu, X, ShoppingBag, Search, Library, ShieldCheck, ClipboardList, Building2, Package, FileText,
 } from "lucide-react";
 import { BrandMark } from "../components/BrandMark";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
 import { useAuthStore } from "@/app/store/auth";
 import { useCartStore } from "@/app/store/cart";
+import { filterNavByRole, type RoleNavItem } from "@/app/lib/roles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -19,28 +20,50 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { cn } from "@/lib/utils";
 
 export function AppLayout() {
   const { t } = useTranslation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const cartCount = useCartStore((s) => s.count());
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const nav = [
+  // Global search: the header field routes to the dedicated search results page,
+  // which performs the debounced cross-module search.
+  const submitSearch = (e: FormEvent) => {
+    e.preventDefault();
+    const q = searchQuery.trim();
+    navigate(q ? `/app/search?q=${encodeURIComponent(q)}` : "/app/search");
+  };
+
+  // Nav items may carry a `roles` restriction; all current items are visible to every
+  // role. Role-scoped destinations (admin/employer/seller) are added in later phases.
+  const nav: Array<RoleNavItem & { icon: typeof Home }> = [
     { to: "/app/dashboard", icon: Home, label: t("nav.dashboard") },
+    { to: "/app/search", icon: Search, label: t("nav.search") },
     { to: "/app/learn", icon: GraduationCap, label: t("nav.learn") },
+    { to: "/app/learn/mine", icon: Library, label: "My Learning" },
     { to: "/app/earn", icon: Briefcase, label: t("nav.earn") },
+    { to: "/app/earn/mine", icon: ClipboardList, label: "My Jobs" },
+    { to: "/app/earn/manage", icon: Building2, label: "Hiring", roles: ["earner", "all"] },
     { to: "/app/flourish", icon: Store, label: t("nav.flourish") },
+    { to: "/app/flourish/mine", icon: Package, label: "My Shop", roles: ["seller", "all"] },
+    { to: "/app/orders", icon: ShoppingBag, label: "Orders" },
+    { to: "/app/resume", icon: FileText, label: "Resume" },
+    { to: "/app/admin/courses", icon: ShieldCheck, label: "Review Queue", roles: ["all"] },
   ];
+  const visibleNav = filterNavByRole(nav, user);
 
   const initials = (user?.name ?? "S").split(" ").map((s) => s[0]).slice(0, 2).join("").toUpperCase();
 
   const SidebarNav = () => (
     <nav className="flex flex-col gap-1">
-      {nav.map((n) => (
+      {visibleNav.map((n) => (
         <NavLink
           key={n.to}
           to={n.to}
@@ -77,14 +100,19 @@ export function AppLayout() {
             <Menu className="h-5 w-5" />
           </button>
           <BrandMark />
-          <Link to="/app/cart" aria-label="Cart" className="relative rounded-full p-2 hover:bg-muted">
-            <ShoppingBag className="h-5 w-5" />
+          <div className="flex items-center gap-1">
+            <Link to="/app/search" aria-label={t("nav.search")} className="rounded-full p-2 hover:bg-muted">
+              <Search className="h-5 w-5" />
+            </Link>
+            <Link to="/app/cart" aria-label="Cart" className="relative rounded-full p-2 hover:bg-muted">
+              <ShoppingBag className="h-5 w-5" />
             {cartCount > 0 && (
               <span className="absolute -top-0.5 -right-0.5 h-4 w-4 text-[10px] rounded-full gradient-primary text-primary-foreground grid place-items-center">
                 {cartCount}
               </span>
             )}
-          </Link>
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -134,13 +162,16 @@ export function AppLayout() {
         <div className="flex-1 min-w-0">
           {/* Desktop top bar */}
           <header className="hidden lg:flex sticky top-0 z-30 items-center gap-4 border-b border-border/60 bg-background/70 px-8 py-4 backdrop-blur-xl">
-            <div className="relative flex-1 max-w-md">
+            <form onSubmit={submitSearch} className="relative flex-1 max-w-md">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder={t("common.search")}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t("search.placeholder")}
+                aria-label={t("search.placeholder")}
                 className="pl-10 rounded-full bg-muted/50 border-transparent focus-visible:bg-card"
               />
-            </div>
+            </form>
             <div className="flex items-center gap-1">
               <LanguageSwitcher />
               <ThemeToggle />
@@ -196,7 +227,11 @@ export function AppLayout() {
           </header>
 
           <main className="px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
-            <Outlet />
+            {/* Per-page boundary: a crash in one page shows a fallback but keeps the
+                app chrome, and recovers automatically when navigating elsewhere. */}
+            <ErrorBoundary compact resetKey={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </main>
         </div>
       </div>

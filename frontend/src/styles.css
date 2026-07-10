@@ -300,3 +300,18 @@
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover { background: oklch(0.55 0.15 285 / 0.45); background-clip: content-box; }
+
+/*
+ * Accessibility preferences (Phase 6). Toggled on <html> by PreferencesContext from
+ * the user's saved Settings. "Larger text" scales the rem base; "reduce motion"
+ * neutralises animations/transitions app-wide.
+ */
+html.text-larger { font-size: 18px; }
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}

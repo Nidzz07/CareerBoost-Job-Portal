@@ -1,9 +1,13 @@
 import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from "axios";
 import { toast } from "sonner";
 
+// Single source of truth for the backend origin. The Express backend mounts every
+// route under `/api`, so the base URL already includes that prefix — endpoint
+// definitions must therefore use bare resource paths (e.g. "/auth/login"), never
+// re-prepend "/api". Override via VITE_API_BASE_URL (see frontend/.env.example).
 export const API_BASE_URL =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
-  "https://api.sakhi.example.com";
+  "http://localhost:5000/api";
 
 const TOKEN_KEY = "sakhi.token";
 const REFRESH_KEY = "sakhi.refresh";
@@ -41,8 +45,24 @@ const flushQueue = (token: string | null) => {
   pendingQueue = [];
 };
 
+// The Express backend wraps successful payloads in a `{ success, data }` envelope.
+// Unwrap it centrally so callers/components receive `data` directly instead of
+// repeating `res.data.data` everywhere. Responses without the envelope (e.g. raw
+// ML passthroughs) are left untouched.
 api.interceptors.response.use(
-  (r) => r,
+  (response) => {
+    const body = response.data;
+    if (
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      "success" in body &&
+      "data" in body
+    ) {
+      response.data = (body as { data: unknown }).data;
+    }
+    return response;
+  },
   async (error: AxiosError) => {
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     const status = error.response?.status;
@@ -66,13 +86,18 @@ api.interceptors.response.use(
       }
       isRefreshing = true;
       try {
-        const { data } = await axios.post<{ token: string; refresh_token?: string }>(
-          `${API_BASE_URL}/auth/refresh`,
-          { refresh_token: refresh },
-        );
-        tokenStore.set(data.token, data.refresh_token);
-        flushQueue(data.token);
-        original.headers.set("Authorization", `Bearer ${data.token}`);
+        // Raw axios (not `api`) to avoid re-entering this interceptor. The backend
+        // wraps the payload in `{ success, data }`, so unwrap it here.
+        const { data: body } = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+          refresh_token: refresh,
+        });
+        const payload = (body && typeof body === "object" && "data" in body ? body.data : body) as {
+          token: string;
+          refresh_token?: string;
+        };
+        tokenStore.set(payload.token, payload.refresh_token);
+        flushQueue(payload.token);
+        original.headers.set("Authorization", `Bearer ${payload.token}`);
         return api(original);
       } catch (e) {
         flushQueue(null);

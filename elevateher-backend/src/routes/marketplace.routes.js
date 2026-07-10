@@ -4,7 +4,9 @@ const {
   getProduct,
   createProduct,
   updateProduct,
+  deleteProduct,
   getMyProducts,
+  getRecommendedProducts,
   createOrder,
   getMyOrders,
   getOrder,
@@ -26,6 +28,10 @@ const { requireAuth, requireRole } = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
+// Authenticated - personalized recommendations (declared before "/products/:id"
+// so the literal path is matched first)
+router.get("/recommendations", requireAuth, getRecommendedProducts);
+
 // Public - products
 router.get("/products", listProducts);
 router.get("/products/:id", getProduct);
@@ -35,6 +41,7 @@ router.get("/products/:id/reviews", getProductReviews);
 router.get("/my-products", requireAuth, requireRole("SELLER", "ADMIN"), getMyProducts);
 router.post("/products", requireAuth, requireRole("SELLER", "ADMIN"), createProduct);
 router.patch("/products/:id", requireAuth, requireRole("SELLER", "ADMIN"), updateProduct);
+router.delete("/products/:id", requireAuth, requireRole("SELLER", "ADMIN"), deleteProduct);
 router.get("/seller-orders", requireAuth, requireRole("SELLER", "ADMIN"), getSellerOrders);
 router.patch("/orders/:id/status", requireAuth, requireRole("SELLER", "ADMIN"), updateOrderStatus);
 router.get("/seller-analytics", requireAuth, requireRole("SELLER", "ADMIN"), getSellerAnalytics);

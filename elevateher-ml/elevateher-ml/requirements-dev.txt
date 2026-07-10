@@ -1,0 +1,6 @@
+# Development / test dependencies for the ML service (not needed at runtime).
+# Install with:  pip install -r requirements-dev.txt
+# Run tests with: pytest
+-r requirements.txt
+pytest
+httpx

@@ -1,4 +1,6 @@
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Moon, Sun, Monitor, Bell, Shield, Accessibility, Lock, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,11 +8,15 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useTheme } from "@/app/contexts/ThemeContext";
+import { usePreferences } from "@/app/contexts/PreferencesContext";
 import { PageMotion } from "../components/PageMotion";
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
+  // Preferences (load + persist + live application) are handled by PreferencesContext,
+  // so accessibility toggles now take effect app-wide, not just in local state.
+  const { prefs, setPref: update } = usePreferences();
 
   return (
     <PageMotion className="space-y-8 max-w-3xl">
@@ -56,26 +62,31 @@ export function SettingsPage() {
       </Section>
 
       <Section title={t("settings.notifications")} icon={Bell}>
-        <ToggleRow label="Email digest" description="Weekly summary of your progress" defaultChecked />
-        <ToggleRow label="Push notifications" description="Real-time updates on your device" defaultChecked />
-        <ToggleRow label="Marketing" description="Occasional emails about new features" />
+        <ToggleRow label="Email digest" description="Weekly summary of your progress" checked={prefs.notifications.emailDigest} onChange={(v) => update("notifications", "emailDigest", v)} />
+        <ToggleRow label="Push notifications" description="Real-time updates on your device" checked={prefs.notifications.push} onChange={(v) => update("notifications", "push", v)} />
+        <ToggleRow label="Marketing" description="Occasional emails about new features" checked={prefs.notifications.marketing} onChange={(v) => update("notifications", "marketing", v)} />
       </Section>
 
       <Section title={t("settings.privacy")} icon={Shield}>
-        <ToggleRow label="Public profile" description="Let mentors and employers find you" defaultChecked />
-        <ToggleRow label="Show my location" description="Helps us surface nearby opportunities" />
+        <ToggleRow label="Public profile" description="Let mentors and employers find you" checked={prefs.privacy.publicProfile} onChange={(v) => update("privacy", "publicProfile", v)} />
+        <ToggleRow label="Show my location" description="Helps us surface nearby opportunities" checked={prefs.privacy.showLocation} onChange={(v) => update("privacy", "showLocation", v)} />
       </Section>
 
       <Section title={t("settings.accessibility")} icon={Accessibility}>
-        <ToggleRow label="Reduce motion" description="Minimise animations across the app" />
-        <ToggleRow label="Larger text" description="Increase base font size" />
+        <ToggleRow label="Reduce motion" description="Minimise animations across the app" checked={prefs.accessibility.reduceMotion} onChange={(v) => update("accessibility", "reduceMotion", v)} />
+        <ToggleRow label="Larger text" description="Increase base font size" checked={prefs.accessibility.largerText} onChange={(v) => update("accessibility", "largerText", v)} />
       </Section>
 
       <Section title={t("settings.account")} icon={Lock}>
         <div className="flex flex-wrap gap-3">
-          <Button variant="outline" className="rounded-full">Change password</Button>
-          <Button variant="outline" className="rounded-full">Download my data</Button>
-          <Button variant="outline" className="rounded-full text-destructive hover:text-destructive">
+          <Button asChild variant="outline" className="rounded-full">
+            <Link to="/forgot-password">Change password</Link>
+          </Button>
+          {/* NOTE: data export & account deletion have no backend endpoint yet (deferred). */}
+          <Button variant="outline" className="rounded-full" onClick={() => toast("Data export isn't available yet.")}>
+            Download my data
+          </Button>
+          <Button variant="outline" className="rounded-full text-destructive hover:text-destructive" onClick={() => toast("Account deletion isn't available yet.")}>
             <Trash2 className="h-4 w-4 mr-1" /> Delete account
           </Button>
         </div>
@@ -96,14 +107,14 @@ function Section({ title, icon: Icon, children }: { title: string; icon?: typeof
   );
 }
 
-function ToggleRow({ label, description, defaultChecked }: { label: string; description: string; defaultChecked?: boolean }) {
+function ToggleRow({ label, description, checked, onChange }: { label: string; description: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
       <div className="min-w-0">
         <div className="text-sm font-medium">{label}</div>
         <div className="text-xs text-muted-foreground">{description}</div>
       </div>
-      <Switch defaultChecked={defaultChecked} />
+      <Switch checked={checked} onCheckedChange={onChange} />
     </div>
   );
 }

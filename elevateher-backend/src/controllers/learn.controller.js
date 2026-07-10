@@ -3,9 +3,13 @@ const prisma = require("../config/prisma");
 const razorpay = require("../config/razorpay");
 const { generateCertificate } = require("../services/certificate");
 const {
+  analyzeReviewSentiment,
   buildCourseCandidate,
+  buildUserProfileText,
   orderByMlIds,
+  predictAtRiskLearners,
   recommendCourses,
+  search,
 } = require("../services/ml.service");
 
 // ---------- COURSES ----------
@@ -17,7 +21,7 @@ const {
  */
 async function listCourses(req, res) {
   try {
-    const { category, language } = req.query;
+    const { q, category, language } = req.query;
 
     let courses = await prisma.course.findMany({
       where: {
@@ -42,6 +46,20 @@ async function listCourses(req, res) {
         Array.isArray(mlResult.recommendations)
           ? mlResult.recommendations.map((item) => item.id)
           : []
+      );
+    }
+
+    // Free-text search: rank the (already filtered) courses by relevance to the
+    // query using the existing ML search service.
+    if (q && courses.length > 0) {
+      const mlSearch = await search({
+        query: q,
+        candidates: courses.map(buildCourseCandidate),
+        limit: courses.length,
+      });
+      courses = orderByMlIds(
+        courses,
+        Array.isArray(mlSearch.results) ? mlSearch.results.map((item) => item.id) : []
       );
     }
 
@@ -449,7 +467,7 @@ async function verifyEnrollmentPayment(req, res) {
 async function updateProgress(req, res) {
   try {
     const { id: enrollmentId } = req.params;
-    const { progress } = req.body;
+    const { progress, completedLessons } = req.body;
 
     if (progress === undefined || progress < 0 || progress > 100) {
       return res.status(400).json({
@@ -498,6 +516,10 @@ async function updateProgress(req, res) {
       data: {
         progress,
         completedAt,
+        lastActivityAt: new Date(),
+        ...(Array.isArray(completedLessons) && {
+          completedLessonsJson: JSON.stringify(completedLessons),
+        }),
         ...(certificateUrl && { certificateUrl }),
       },
     });
@@ -805,13 +827,236 @@ async function getCourseReviews(req, res) {
     const avgRating =
       reviews.length > 0 ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length : null;
 
+    // ML review sentiment: aggregate trust signal from the review comments.
+    let sentiment = null;
+    const withComments = reviews.filter((r) => r.comment && r.comment.trim());
+    if (withComments.length > 0) {
+      const result = await analyzeReviewSentiment({
+        reviews: withComments.map((r) => ({ text: r.comment })),
+      });
+      sentiment = {
+        overallScore: result.overallScore,
+        trustLabel: result.trustLabel,
+      };
+    }
+
     return res.status(200).json({
       success: true,
-      data: { reviews, avgRating, totalReviews: reviews.length },
+      data: { reviews, avgRating, totalReviews: reviews.length, sentiment },
     });
   } catch (err) {
     console.error("Get course reviews error:", err);
     return res.status(500).json({ success: false, message: "Could not fetch reviews" });
+  }
+}
+
+// ---------- LESSONS ----------
+
+/**
+ * GET /api/learn/courses/:id/lessons
+ * Requires auth. Returns a course's lessons in order (drives the course player).
+ */
+async function listLessons(req, res) {
+  try {
+    const { id: courseId } = req.params;
+    const lessons = await prisma.lesson.findMany({
+      where: { courseId },
+      orderBy: { order: "asc" },
+    });
+    return res.status(200).json({ success: true, data: { lessons } });
+  } catch (err) {
+    console.error("List lessons error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch lessons" });
+  }
+}
+
+/** Loads a course and verifies the caller owns it (or is admin). */
+async function assertCourseOwner(courseId, user) {
+  const course = await prisma.course.findUnique({ where: { id: courseId } });
+  if (!course) return { error: { status: 404, message: "Course not found" } };
+  if (course.mentorId !== user.id && user.role !== "ADMIN") {
+    return { error: { status: 403, message: "You do not own this course" } };
+  }
+  return { course };
+}
+
+/**
+ * POST /api/learn/courses/:courseId/lessons
+ * Requires auth (course owner/admin). Adds a lesson.
+ * Body: { title, content, videoUrl, order }
+ */
+async function createLesson(req, res) {
+  try {
+    const { courseId } = req.params;
+    const { title, content, videoUrl, order } = req.body;
+
+    if (!title) {
+      return res.status(400).json({ success: false, message: "title is required" });
+    }
+
+    const owner = await assertCourseOwner(courseId, req.user);
+    if (owner.error) return res.status(owner.error.status).json({ success: false, message: owner.error.message });
+
+    const count = await prisma.lesson.count({ where: { courseId } });
+    const lesson = await prisma.lesson.create({
+      data: {
+        courseId,
+        title,
+        content: content ?? null,
+        videoUrl: videoUrl ?? null,
+        order: order ?? count,
+      },
+    });
+
+    return res.status(201).json({ success: true, message: "Lesson added", data: { lesson } });
+  } catch (err) {
+    console.error("Create lesson error:", err);
+    return res.status(500).json({ success: false, message: "Could not add lesson" });
+  }
+}
+
+/**
+ * PATCH /api/learn/lessons/:id
+ * Requires auth (course owner/admin). Updates a lesson.
+ */
+async function updateLesson(req, res) {
+  try {
+    const { id } = req.params;
+    const { title, content, videoUrl, order } = req.body;
+
+    const lesson = await prisma.lesson.findUnique({ where: { id } });
+    if (!lesson) return res.status(404).json({ success: false, message: "Lesson not found" });
+
+    const owner = await assertCourseOwner(lesson.courseId, req.user);
+    if (owner.error) return res.status(owner.error.status).json({ success: false, message: owner.error.message });
+
+    const updated = await prisma.lesson.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title }),
+        ...(content !== undefined && { content }),
+        ...(videoUrl !== undefined && { videoUrl }),
+        ...(order !== undefined && { order }),
+      },
+    });
+
+    return res.status(200).json({ success: true, message: "Lesson updated", data: { lesson: updated } });
+  } catch (err) {
+    console.error("Update lesson error:", err);
+    return res.status(500).json({ success: false, message: "Could not update lesson" });
+  }
+}
+
+/**
+ * DELETE /api/learn/lessons/:id
+ * Requires auth (course owner/admin). Removes a lesson.
+ */
+async function deleteLesson(req, res) {
+  try {
+    const { id } = req.params;
+    const lesson = await prisma.lesson.findUnique({ where: { id } });
+    if (!lesson) return res.status(404).json({ success: false, message: "Lesson not found" });
+
+    const owner = await assertCourseOwner(lesson.courseId, req.user);
+    if (owner.error) return res.status(owner.error.status).json({ success: false, message: owner.error.message });
+
+    await prisma.lesson.delete({ where: { id } });
+    return res.status(200).json({ success: true, message: "Lesson deleted" });
+  } catch (err) {
+    console.error("Delete lesson error:", err);
+    return res.status(500).json({ success: false, message: "Could not delete lesson" });
+  }
+}
+
+// ---------- ML: RECOMMENDATIONS & DROPOUT ----------
+
+/**
+ * GET /api/learn/recommendations
+ * Requires auth. Personalized course recommendations built from the user's profile,
+ * resume, and completed courses, ranked by the existing ML recommend endpoint.
+ */
+async function getRecommendedCourses(req, res) {
+  try {
+    const [user, resume, enrollments, courses] = await Promise.all([
+      prisma.user.findUnique({ where: { id: req.user.id } }),
+      prisma.resume.findUnique({ where: { userId: req.user.id } }),
+      prisma.enrollment.findMany({ where: { userId: req.user.id }, include: { course: true } }),
+      prisma.course.findMany({ where: { isPublished: true, reviewStatus: "APPROVED" } }),
+    ]);
+
+    const enrolledIds = new Set(enrollments.map((e) => e.courseId));
+    const candidates = courses.filter((c) => !enrolledIds.has(c.id));
+
+    let recommended = candidates;
+    const profileText = buildUserProfileText({ user, resume, enrollments });
+
+    if (profileText && candidates.length > 0) {
+      const mlResult = await recommendCourses({
+        userId: req.user.id,
+        userProfileText: profileText,
+        candidates: candidates.map(buildCourseCandidate),
+        limit: candidates.length,
+      });
+      recommended = orderByMlIds(
+        candidates,
+        Array.isArray(mlResult.recommendations) ? mlResult.recommendations.map((item) => item.id) : []
+      );
+    }
+
+    return res.status(200).json({ success: true, data: { courses: recommended.slice(0, 10) } });
+  } catch (err) {
+    console.error("Get recommended courses error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch recommendations" });
+  }
+}
+
+/**
+ * GET /api/learn/courses/:id/at-risk
+ * Requires auth (course owner/admin). Flags enrolled learners at risk of dropping
+ * out using the existing ML dropout endpoint.
+ */
+async function getCourseAtRisk(req, res) {
+  try {
+    const { id: courseId } = req.params;
+
+    const owner = await assertCourseOwner(courseId, req.user);
+    if (owner.error) return res.status(owner.error.status).json({ success: false, message: owner.error.message });
+
+    const enrollments = await prisma.enrollment.findMany({
+      where: { courseId },
+      include: { user: { select: { id: true, name: true, phone: true } } },
+    });
+
+    const now = Date.now();
+    const daysBetween = (from) => Math.max(0, Math.floor((now - new Date(from).getTime()) / 86400000));
+
+    const mlResult = await predictAtRiskLearners({
+      enrollments: enrollments.map((e) => ({
+        enrollmentId: e.id,
+        progress: e.progress,
+        daysSinceLastActivity: daysBetween(e.lastActivityAt || e.enrolledAt),
+        enrolledDaysAgo: daysBetween(e.enrolledAt),
+      })),
+    });
+
+    const byId = new Map(enrollments.map((e) => [e.id, e]));
+    const atRisk = (Array.isArray(mlResult.atRisk) ? mlResult.atRisk : [])
+      .map((item) => {
+        const enrollment = byId.get(item.enrollmentId);
+        if (!enrollment) return null;
+        return {
+          enrollmentId: item.enrollmentId,
+          riskScore: item.riskScore,
+          progress: enrollment.progress,
+          learner: enrollment.user,
+        };
+      })
+      .filter(Boolean);
+
+    return res.status(200).json({ success: true, data: { atRisk, totalEnrolled: enrollments.length } });
+  } catch (err) {
+    console.error("Get at-risk learners error:", err);
+    return res.status(500).json({ success: false, message: "Could not compute at-risk learners" });
   }
 }
 
@@ -825,6 +1070,12 @@ module.exports = {
   getPendingCourses,
   reviewCourse,
   enrollInCourse,
+  listLessons,
+  createLesson,
+  updateLesson,
+  deleteLesson,
+  getRecommendedCourses,
+  getCourseAtRisk,
   createEnrollmentPayment,
   verifyEnrollmentPayment,
   updateProgress,

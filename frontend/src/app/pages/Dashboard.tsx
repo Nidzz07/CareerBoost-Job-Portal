@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   BookOpen, Briefcase, Store, Flame, Trophy, Sparkles, ArrowUpRight, Bell,
-  Play, ShoppingBag,
+  Play, ShoppingBag, CalendarClock,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip as RTooltip,
@@ -19,25 +19,38 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 import { useAuthStore } from "@/app/store/auth";
-import { coursesApi, jobsApi, productsApi, notificationsApi } from "@/app/services/api/endpoints";
+import { coursesApi, jobsApi, productsApi, notificationsApi, ordersApi } from "@/app/services/api/endpoints";
+import { useUserInsights, type ActivityKind } from "@/app/lib/insights";
 import { PageMotion } from "../components/PageMotion";
 import { ListSkeleton } from "../components/Skeletons";
+import { EmptyState } from "../components/EmptyState";
 
-const weekly = [
-  { d: "M", v: 20 }, { d: "T", v: 45 }, { d: "W", v: 30 },
-  { d: "T", v: 60 }, { d: "F", v: 50 }, { d: "S", v: 80 }, { d: "S", v: 65 },
-];
+const KIND_META: Record<ActivityKind, { icon: typeof BookOpen; tint: string }> = {
+  course: { icon: BookOpen, tint: "bg-primary/10 text-primary" },
+  certificate: { icon: Trophy, tint: "bg-warning/20 text-warning" },
+  job: { icon: Briefcase, tint: "bg-secondary/10 text-secondary" },
+  interview: { icon: CalendarClock, tint: "bg-primary/10 text-primary" },
+  order: { icon: Store, tint: "bg-accent/10 text-accent" },
+};
 
-const activity = [
-  { icon: BookOpen, title: "Completed lesson 'Intro to UX'", time: "2h ago", tint: "bg-primary/10 text-primary" },
-  { icon: Briefcase, title: "Applied to 'Junior Designer at TATA'", time: "yesterday", tint: "bg-secondary/10 text-secondary" },
-  { icon: Store, title: "Sold 2 handmade earrings", time: "2 days ago", tint: "bg-accent/10 text-accent" },
-  { icon: Trophy, title: "Earned certificate: Digital Literacy", time: "3 days ago", tint: "bg-warning/20 text-warning" },
-];
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 0) return new Date(iso).toLocaleDateString();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return mins <= 1 ? "just now" : `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
 export function DashboardPage() {
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
+  const insights = useUserInsights();
+  const isSeller = user?.role === "seller" || user?.role === "all";
 
   const greeting = useMemo(() => {
     const h = new Date().getHours();
@@ -50,13 +63,19 @@ export function DashboardPage() {
   const jobs = useQuery({ queryKey: ["recommended-jobs"], queryFn: jobsApi.recommended });
   const featured = useQuery({ queryKey: ["featured-products"], queryFn: productsApi.featured });
   const notifs = useQuery({ queryKey: ["notifications"], queryFn: notificationsApi.list });
+  const analytics = useQuery({ queryKey: ["seller-analytics"], queryFn: ordersApi.analytics, enabled: isSeller });
+
+  const earnings = isSeller ? analytics.data?.totalRevenue ?? 0 : insights.totalSpent;
 
   const stats = [
-    { label: t("dashboard.streak"), value: user?.streak ?? 7, icon: Flame, color: "text-destructive", suffix: " 🔥" },
-    { label: t("dashboard.xp"), value: user?.xp ?? 1280, icon: Sparkles, color: "text-primary" },
-    { label: t("dashboard.certificates"), value: 4, icon: Trophy, color: "text-warning" },
-    { label: t("dashboard.earnings"), value: "₹8,420", icon: ShoppingBag, color: "text-accent" },
+    { label: t("dashboard.streak"), value: insights.streak, icon: Flame, color: "text-destructive", suffix: " 🔥" },
+    { label: t("dashboard.xp"), value: insights.xp, icon: Sparkles, color: "text-primary" },
+    { label: t("dashboard.certificates"), value: insights.certificates, icon: Trophy, color: "text-warning" },
+    { label: isSeller ? t("dashboard.earnings") : "Spent", value: `₹${earnings.toLocaleString()}`, icon: ShoppingBag, color: "text-accent" },
   ];
+
+  const cont = insights.continueLearning;
+  const contProgress = cont?.progress ?? 0;
 
   return (
     <PageMotion className="space-y-8">
@@ -77,12 +96,7 @@ export function DashboardPage() {
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {stats.map((s, i) => (
-          <motion.div
-            key={s.label}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05 }}
-          >
+          <motion.div key={s.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
             <Card className="rounded-3xl border-border bg-card p-5 hover-lift">
               <div className="flex items-center justify-between">
                 <s.icon className={`h-5 w-5 ${s.color}`} />
@@ -103,13 +117,13 @@ export function DashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold">{t("dashboard.progress_title")}</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">You're up 24% from last week</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Your activity over the last 7 days</p>
             </div>
             <Badge variant="secondary" className="rounded-full">Weekly</Badge>
           </div>
           <div className="mt-4 h-56">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={weekly}>
+              <AreaChart data={insights.weekly}>
                 <defs>
                   <linearGradient id="grad-primary" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.4} />
@@ -117,11 +131,9 @@ export function DashboardPage() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="d" stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis hide />
-                <RTooltip
-                  contentStyle={{ background: "var(--color-card)", border: "1px solid var(--color-border)", borderRadius: 12 }}
-                />
-                <Area type="monotone" dataKey="v" stroke="var(--color-primary)" strokeWidth={3} fill="url(#grad-primary)" />
+                <YAxis hide allowDecimals={false} />
+                <RTooltip contentStyle={{ background: "var(--color-card)", border: "1px solid var(--color-border)", borderRadius: 12 }} />
+                <Area type="monotone" dataKey="v" name="activities" stroke="var(--color-primary)" strokeWidth={3} fill="url(#grad-primary)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -129,25 +141,37 @@ export function DashboardPage() {
 
         <Card className="rounded-3xl border-border bg-card p-6 flex flex-col">
           <h3 className="font-semibold">{t("dashboard.continue_learning")}</h3>
-          <div className="mt-4 mx-auto">
-            <ResponsiveContainer width={160} height={160}>
-              <RadialBarChart innerRadius="70%" outerRadius="100%" data={[{ v: 68 }]} startAngle={90} endAngle={-270}>
-                <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
-                <RadialBar dataKey="v" cornerRadius={20} fill="var(--color-primary)" background={{ fill: "var(--color-muted)" }} />
-              </RadialBarChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="text-center -mt-24">
-            <div className="text-3xl font-bold">68%</div>
-            <div className="text-xs text-muted-foreground">Course complete</div>
-          </div>
-          <div className="mt-auto pt-8">
-            <div className="text-sm font-medium">UX Fundamentals</div>
-            <Progress value={68} className="mt-2 h-2" />
-            <Button asChild size="sm" className="mt-4 w-full rounded-full gradient-primary text-primary-foreground">
-              <Link to="/app/learn/1"><Play className="h-3.5 w-3.5 mr-1" /> {t("learn.continue")}</Link>
-            </Button>
-          </div>
+          {cont ? (
+            <>
+              <div className="mt-4 mx-auto">
+                <ResponsiveContainer width={160} height={160}>
+                  <RadialBarChart innerRadius="70%" outerRadius="100%" data={[{ v: contProgress }]} startAngle={90} endAngle={-270}>
+                    <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                    <RadialBar dataKey="v" cornerRadius={20} fill="var(--color-primary)" background={{ fill: "var(--color-muted)" }} />
+                  </RadialBarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="text-center -mt-24">
+                <div className="text-3xl font-bold">{contProgress}%</div>
+                <div className="text-xs text-muted-foreground">Course complete</div>
+              </div>
+              <div className="mt-auto pt-8">
+                <div className="text-sm font-medium line-clamp-1">{cont.course.title}</div>
+                <Progress value={contProgress} className="mt-2 h-2" />
+                <Button asChild size="sm" className="mt-4 w-full rounded-full gradient-primary text-primary-foreground">
+                  <Link to={`/app/learn/${cont.course.id}/learn`}><Play className="h-3.5 w-3.5 mr-1" /> {t("learn.continue")}</Link>
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-center py-8">
+              <BookOpen className="h-8 w-8 text-muted-foreground" />
+              <p className="mt-3 text-sm text-muted-foreground">No course in progress.</p>
+              <Button asChild size="sm" className="mt-4 rounded-full gradient-primary text-primary-foreground">
+                <Link to="/app/learn">Browse courses</Link>
+              </Button>
+            </div>
+          )}
         </Card>
       </div>
 
@@ -155,9 +179,11 @@ export function DashboardPage() {
       <Section title={t("dashboard.recommended_courses")} href="/app/learn">
         {courses.isLoading ? (
           <ListSkeleton count={3} />
+        ) : (courses.data ?? []).length === 0 ? (
+          <EmptyState icon={BookOpen} title="No course recommendations yet" description="Enrol in a course or build your resume to get personalised picks." />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {(courses.data ?? placeholderCourses).slice(0, 3).map((c) => (
+            {(courses.data ?? []).slice(0, 3).map((c) => (
               <MiniCourseCard key={c.id} title={c.title} category={c.category} progress={c.progress ?? 0} id={c.id} />
             ))}
           </div>
@@ -168,9 +194,11 @@ export function DashboardPage() {
         <Section title={t("dashboard.recommended_jobs")} href="/app/earn">
           {jobs.isLoading ? (
             <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-20 rounded-2xl bg-muted animate-pulse" />)}</div>
+          ) : (jobs.data ?? []).length === 0 ? (
+            <EmptyState icon={Briefcase} title="No job recommendations yet" description="Add skills to your resume to see matched roles." />
           ) : (
             <div className="space-y-3">
-              {(jobs.data ?? placeholderJobs).slice(0, 3).map((j) => (
+              {(jobs.data ?? []).slice(0, 3).map((j) => (
                 <MiniJobRow key={j.id} title={j.title} company={j.company.name} location={j.location} id={j.id} remote={j.remote} />
               ))}
             </div>
@@ -178,41 +206,56 @@ export function DashboardPage() {
         </Section>
 
         <Section title={t("dashboard.activity")}>
-          <div className="space-y-3">
-            {activity.map((a, i) => (
-              <div key={i} className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5">
-                <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${a.tint}`}>
-                  <a.icon className="h-4 w-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{a.title}</div>
-                  <div className="text-xs text-muted-foreground">{a.time}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+          {insights.isLoading ? (
+            <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-14 rounded-2xl bg-muted animate-pulse" />)}</div>
+          ) : insights.activity.length === 0 ? (
+            <EmptyState icon={Sparkles} title="No activity yet" description="Your learning, jobs and orders will show up here." />
+          ) : (
+            <div className="space-y-3">
+              {insights.activity.slice(0, 6).map((a) => {
+                const meta = KIND_META[a.kind];
+                return (
+                  <div key={a.id} className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5">
+                    <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${meta.tint}`}>
+                      <meta.icon className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium truncate">{a.title}</div>
+                      <div className="text-xs text-muted-foreground">{timeAgo(a.date)}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </Section>
       </div>
 
       <Section title={t("dashboard.marketplace_highlights")} href="/app/flourish">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {(featured.data ?? placeholderProducts).slice(0, 4).map((p) => (
-            <Card key={p.id} className="overflow-hidden rounded-3xl border-border bg-card hover-lift">
-              <Link to={`/app/flourish/${p.id}`}>
-                <div className="aspect-square gradient-aurora" />
-                <div className="p-4">
-                  <div className="text-sm font-semibold truncate">{p.name}</div>
-                  <div className="text-xs text-muted-foreground truncate">{p.seller.name}</div>
-                  <div className="mt-2 font-bold">₹{p.price}</div>
-                </div>
-              </Link>
-            </Card>
-          ))}
-        </div>
+        {(featured.data ?? []).length === 0 ? (
+          <EmptyState icon={Store} title="No products to show yet" />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {(featured.data ?? []).slice(0, 4).map((p) => (
+              <Card key={p.id} className="overflow-hidden rounded-3xl border-border bg-card hover-lift">
+                <Link to={`/app/flourish/${p.id}`}>
+                  <div className="aspect-square gradient-aurora overflow-hidden">
+                    {p.images?.[0] && <img src={p.images[0]} alt={p.name} className="h-full w-full object-cover" />}
+                  </div>
+                  <div className="p-4">
+                    <div className="text-sm font-semibold truncate">{p.name}</div>
+                    <div className="text-xs text-muted-foreground truncate">{p.seller.name}</div>
+                    <div className="mt-2 font-bold">₹{p.price}</div>
+                  </div>
+                </Link>
+              </Card>
+            ))}
+          </div>
+        )}
       </Section>
 
       {notifs.data && notifs.data.length > 0 && (
-        <p className="text-xs text-muted-foreground">You have {notifs.data.filter(n => !n.read).length} unread notifications.</p>
+        <p className="text-xs text-muted-foreground">You have {notifs.data.filter((n) => !n.read).length} unread notifications.</p>
       )}
     </PageMotion>
   );
@@ -223,9 +266,7 @@ function Section({ title, href, children }: { title: string; href?: string; chil
     <section>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">{title}</h2>
-        {href && (
-          <Link to={href} className="text-xs text-primary story-link">View all</Link>
-        )}
+        {href && <Link to={href} className="text-xs text-primary story-link">View all</Link>}
       </div>
       {children}
     </section>
@@ -268,23 +309,3 @@ function MiniJobRow({ id, title, company, location, remote }: { id: string; titl
     </Link>
   );
 }
-
-// Fallback data used when API isn't available (still no mock backend — just harmless UI placeholders)
-const placeholderCourses = [
-  { id: "1", title: "UX Fundamentals for Beginners", category: "Design", progress: 68 },
-  { id: "2", title: "Digital Marketing 101", category: "Marketing", progress: 24 },
-  { id: "3", title: "Financial Literacy Basics", category: "Finance", progress: 0 },
-] as Array<{ id: string; title: string; category: string; progress: number }>;
-
-const placeholderJobs = [
-  { id: "1", title: "Junior UX Designer", company: { name: "TATA Digital" }, location: "Mumbai", remote: true },
-  { id: "2", title: "Content Writer", company: { name: "Zomato" }, location: "Bengaluru", remote: true },
-  { id: "3", title: "Customer Support", company: { name: "Meesho" }, location: "Remote", remote: true },
-] as Array<{ id: string; title: string; company: { name: string }; location: string; remote: boolean }>;
-
-const placeholderProducts = [
-  { id: "1", name: "Hand-block sarees", seller: { name: "Meena Crafts" }, price: 1499 },
-  { id: "2", name: "Terracotta earrings", seller: { name: "Rohini Handmade" }, price: 349 },
-  { id: "3", name: "Organic soap set", seller: { name: "Green Farm Co" }, price: 599 },
-  { id: "4", name: "Kalamkari cushions", seller: { name: "Anita Textiles" }, price: 899 },
-] as Array<{ id: string; name: string; seller: { name: string }; price: number }>;

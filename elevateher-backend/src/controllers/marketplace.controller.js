@@ -3,6 +3,7 @@ const prisma = require("../config/prisma");
 const razorpay = require("../config/razorpay");
 const {
   buildProductCandidate,
+  buildUserProfileText,
   orderByMlIds,
   search,
 } = require("../services/ml.service");
@@ -16,7 +17,7 @@ const {
  */
 async function listProducts(req, res) {
   try {
-    const { category, sellerId } = req.query;
+    const { q, category, sellerId } = req.query;
 
     let products = await prisma.product.findMany({
       where: {
@@ -30,9 +31,13 @@ async function listProducts(req, res) {
       orderBy: { createdAt: "desc" },
     });
 
-    if (category && products.length > 0) {
+    // Rank by relevance using the existing ML search service. A free-text `q`
+    // (from the marketplace search box) takes priority; otherwise fall back to the
+    // selected category, preserving the previous behaviour.
+    const searchQuery = q || category;
+    if (searchQuery && products.length > 0) {
       const mlResult = await search({
-        query: category,
+        query: searchQuery,
         candidates: products.map(buildProductCandidate),
         limit: products.length,
       });
@@ -170,6 +175,91 @@ async function getMyProducts(req, res) {
   } catch (err) {
     console.error("Get my products error:", err);
     return res.status(500).json({ success: false, message: "Could not fetch your products" });
+  }
+}
+
+/**
+ * DELETE /api/marketplace/products/:id
+ * Requires auth. Only the owning seller (or admin) can delete.
+ * Products referenced by existing orders are archived (isActive=false) to preserve
+ * order history; otherwise the row is hard-deleted (after clearing cart references).
+ */
+async function deleteProduct(req, res) {
+  try {
+    const { id } = req.params;
+
+    const product = await prisma.product.findUnique({ where: { id } });
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+    if (product.sellerId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ success: false, message: "You do not own this product" });
+    }
+
+    const orderItemCount = await prisma.orderItem.count({ where: { productId: id } });
+    if (orderItemCount > 0) {
+      const archived = await prisma.product.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      return res.status(200).json({
+        success: true,
+        message: "Product archived (it has order history)",
+        data: { product: archived },
+      });
+    }
+
+    // No order history — safe to hard-delete. Clear any cart references first.
+    await prisma.cartItem.deleteMany({ where: { productId: id } });
+    await prisma.product.delete({ where: { id } });
+
+    return res.status(200).json({ success: true, message: "Product deleted" });
+  } catch (err) {
+    console.error("Delete product error:", err);
+    return res.status(500).json({ success: false, message: "Could not delete product" });
+  }
+}
+
+/**
+ * GET /api/marketplace/recommendations
+ * Requires auth. Personalized product recommendations, ranked by the caller's
+ * profile/resume/completed courses using the existing ML search endpoint (the
+ * profile text acts as the ranking query). Excludes the caller's own listings.
+ * Reuses ML infrastructure only — no new ML schema.
+ */
+async function getRecommendedProducts(req, res) {
+  try {
+    const [user, resume, enrollments, products] = await Promise.all([
+      prisma.user.findUnique({ where: { id: req.user.id } }),
+      prisma.resume.findUnique({ where: { userId: req.user.id } }),
+      prisma.enrollment.findMany({ where: { userId: req.user.id }, include: { course: true } }),
+      prisma.product.findMany({
+        where: { isActive: true },
+        include: { seller: { select: { id: true, name: true, location: true } } },
+      }),
+    ]);
+
+    const candidates = products.filter((p) => p.sellerId !== req.user.id);
+
+    let recommended = candidates;
+    const profileText = buildUserProfileText({ user, resume, enrollments });
+
+    if (profileText && candidates.length > 0) {
+      const mlResult = await search({
+        query: profileText,
+        candidates: candidates.map(buildProductCandidate),
+        limit: candidates.length,
+      });
+      recommended = orderByMlIds(
+        candidates,
+        Array.isArray(mlResult.results) ? mlResult.results.map((item) => item.id) : []
+      );
+    }
+
+    return res.status(200).json({ success: true, data: { products: recommended.slice(0, 8) } });
+  } catch (err) {
+    console.error("Get recommended products error:", err);
+    return res.status(500).json({ success: false, message: "Could not fetch recommendations" });
   }
 }
 
@@ -836,7 +926,9 @@ module.exports = {
   getProduct,
   createProduct,
   updateProduct,
+  deleteProduct,
   getMyProducts,
+  getRecommendedProducts,
   createOrder,
   getMyOrders,
   getOrder,

@@ -7,6 +7,7 @@
     "login": "Sign in",
     "signup": "Get started",
     "dashboard": "Dashboard",
+    "search": "Search",
     "learn": "Learn",
     "earn": "Earn",
     "flourish": "Flourish",
@@ -15,6 +16,21 @@
     "settings": "Settings",
     "logout": "Sign out",
     "cart": "Cart"
+  },
+  "search": {
+    "title": "Search",
+    "subtitle": "Find courses, jobs and products in one place.",
+    "placeholder": "Search courses, jobs and products…",
+    "all": "All",
+    "courses": "Courses",
+    "jobs": "Jobs",
+    "products": "Products",
+    "prompt": "Type at least 2 characters to search.",
+    "empty": "No results found",
+    "empty_sub": "Try different keywords.",
+    "no_courses": "No courses found",
+    "no_jobs": "No jobs found",
+    "no_products": "No products found"
   },
   "landing": {
     "eyebrow": "AI-powered livelihood platform for women",

@@ -1,11 +1,24 @@
 /**
  * Notification Service
  *
- * Simulated for now (logs to console) so the rest of the app can call these
- * without waiting on real SMS/push credentials. Swap the body of sendSMS()
- * for a real Twilio/MSG91 call once you have credentials - nothing else
- * in the codebase needs to change.
+ * SMS/push are simulated for now (logs to console) so the rest of the app can call
+ * these without waiting on real Twilio/MSG91/FCM credentials. In-app notifications
+ * are persisted to PostgreSQL via createNotification() and read through
+ * /api/notifications.
  */
+
+const prisma = require("../config/prisma");
+
+/**
+ * Persist an in-app notification. Reusable foundation (Phase 0) — modules do not
+ * call this yet; notification emission is wired in a later phase.
+ * @param {{ userId: string, type?: string, title: string, body?: string, link?: string }} input
+ */
+async function createNotification({ userId, type = "system", title, body = null, link = null }) {
+  return prisma.notification.create({
+    data: { userId, type, title, body, link },
+  });
+}
 
 async function sendSMS(phone, message) {
   // ---- Real implementation (Twilio) would look like this: ----
@@ -53,6 +66,7 @@ async function notifyOrderStatus(user, order, status) {
 }
 
 module.exports = {
+  createNotification,
   sendSMS,
   sendPush,
   notifyEnrollment,
